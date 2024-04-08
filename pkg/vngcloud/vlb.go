@@ -1,0 +1,889 @@
+package vngcloud
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	lSdkClient "github.com/vngcloud/cloud-provider-vngcloud/pkg/client"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
+	lMetrics "github.com/vngcloud/cloud-provider-vngcloud/pkg/metrics"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
+	vErrors "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/errors"
+	lMetadata "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/metadata"
+	vngcloudutil "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/vngcloud"
+	lClient "github.com/vngcloud/vngcloud-go-sdk/client"
+	lObjects "github.com/vngcloud/vngcloud-go-sdk/vngcloud/objects"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
+	lCoreV1 "k8s.io/api/core/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
+)
+
+type (
+	// VLbOpts is default vLB configurations that are loaded from the vcontainer-ccm config file
+	VLbOpts struct {
+		DefaultL4PackageID               string `gcfg:"default-l4-package-id"`
+		DefaultListenerAllowedCIDRs      string `gcfg:"default-listener-allowed-cidrs"`
+		DefaultIdleTimeoutClient         int    `gcfg:"default-idle-timeout-client"`
+		DefaultIdleTimeoutMember         int    `gcfg:"default-idle-timeout-member"`
+		DefaultIdleTimeoutConnection     int    `gcfg:"default-idle-timeout-connection"`
+		DefaultPoolAlgorithm             string `gcfg:"default-pool-algorithm"`
+		DefaultMonitorHealthyThreshold   int    `gcfg:"default-monitor-healthy-threshold"`
+		DefaultMonitorUnhealthyThreshold int    `gcfg:"default-monitor-unhealthy-threshold"`
+		DefaultMonitorTimeout            int    `gcfg:"default-monitor-timeout"`
+		DefaultMonitorInterval           int    `gcfg:"default-monitor-interval"`
+		DefaultMonitorHttpMethod         string `gcfg:"default-monitor-http-method"`
+		DefaultMonitorHttpPath           string `gcfg:"default-monitor-http-path"`
+		DefaultMonitorHttpSuccessCode    string `gcfg:"default-monitor-http-success-code"`
+		DefaultMonitorHttpVersion        string `gcfg:"default-monitor-http-version"`
+		DefaultMonitorHttpDomainName     string `gcfg:"default-monitor-http-domain-name"`
+		DefaultMonitorProtocol           string `gcfg:"default-monitor-protocol"`
+	}
+
+	// vLB is the implementation of the VNG CLOUD for actions on load balancer
+	vLB struct {
+		vLBSC     *lClient.ServiceClient
+		vServerSC *lClient.ServiceClient
+
+		kubeClient    kubernetes.Interface
+		eventRecorder record.EventRecorder
+		vLbConfig     VLbOpts
+		extraInfo     *vngcloudutil.ExtraInfo
+		trackLBUpdate *utils.UpdateTracker
+		serviceCache  map[string]*lCoreV1.Service
+
+		serviceLister       corelisters.ServiceLister
+		serviceListerSynced cache.InformerSynced
+		nodeLister          corelisters.NodeLister
+		nodeListerSynced    cache.InformerSynced
+		stopCh              chan struct{}
+		informer            informers.SharedInformerFactory
+		mu                  sync.Mutex
+		numOfUpdatingThread int
+		config              *Config
+	}
+
+	// Config is the configuration for the VNG CLOUD load balancer controller,
+	// it is loaded from the vcontainer-ccm config file
+	Config struct {
+		Global   lSdkClient.AuthOpts // global configurations, it is loaded from Helm helpers and values.yaml
+		VLB      VLbOpts             // vLB configurations, it is loaded from Helm helpers and values.yaml
+		Metadata lMetadata.Opts      // metadata service config, by default is empty
+		Cluster  struct {
+			ClusterName string `gcfg:"cluster-name"`
+			ClusterID   string `gcfg:"cluster-id"`
+		}
+	}
+)
+
+func (s *vLB) Init() {
+	kubeInformerFactory := informers.NewSharedInformerFactory(s.kubeClient, time.Second*30)
+	serviceInformer := kubeInformerFactory.Core().V1().Services()
+	nodeInformer := kubeInformerFactory.Core().V1().Nodes()
+
+	s.nodeLister = nodeInformer.Lister()
+	s.nodeListerSynced = nodeInformer.Informer().HasSynced
+	s.serviceLister = serviceInformer.Lister()
+	s.serviceListerSynced = serviceInformer.Informer().HasSynced
+	s.stopCh = make(chan struct{})
+	s.informer = kubeInformerFactory
+	s.numOfUpdatingThread = 0
+
+	defer close(s.stopCh)
+	go s.informer.Start(s.stopCh)
+
+	// wait for the caches to synchronize before starting the worker
+	if !cache.WaitForCacheSync(s.stopCh, s.serviceListerSynced, s.nodeListerSynced) {
+		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
+		return
+	}
+
+	go wait.Until(s.nodeSyncLoop, 30*time.Second, s.stopCh)
+	<-s.stopCh
+}
+
+// ****************************** IMPLEMENTATIONS OF KUBERNETES CLOUD PROVIDER INTERFACE *******************************
+
+func (s *vLB) GetLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
+	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
+	klog.InfoS("GetLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
+	status, existed, err := s.ensureGetLoadBalancer(pCtx, clusterName, pService)
+	return status, existed, mc.ObserveReconcile(err)
+}
+
+func (s *vLB) GetLoadBalancerName(_ context.Context, clusterName string, pService *lCoreV1.Service) string {
+	return utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+}
+
+func (s *vLB) EnsureLoadBalancer(
+	pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*lCoreV1.LoadBalancerStatus, error) {
+	s.addUpdatingThread()
+	defer s.removeUpdatingThread()
+	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
+	klog.InfoS("EnsureLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
+	status, err := s.ensureLoadBalancer(pCtx, clusterName, pService, pNodes)
+	return status, mc.ObserveReconcile(err)
+}
+
+// UpdateLoadBalancer updates hosts under the specified load balancer. This will be executed when user add or remove nodes
+// from the cluster
+func (s *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) error {
+	nodeNames := make([]string, 0, len(pNodes))
+	for _, node := range pNodes {
+		nodeNames = append(nodeNames, node.Name)
+	}
+	klog.Infof("UpdateLoadBalancer: update load balancer for service %s/%s, the nodes are: %v",
+		pService.Namespace, pService.Name, nodeNames)
+	s.addUpdatingThread()
+	defer s.removeUpdatingThread()
+	mc := lMetrics.NewMetricContext("loadbalancer", "update-loadbalancer")
+	klog.InfoS("UpdateLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
+	_, err := s.ensureLoadBalancer(pCtx, clusterName, pService, pNodes)
+	return mc.ObserveReconcile(err)
+}
+
+func (s *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+	s.addUpdatingThread()
+	defer s.removeUpdatingThread()
+	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
+	klog.InfoS("EnsureLoadBalancerDeleted", "cluster", clusterName, "service", klog.KObj(pService))
+	err := s.ensureDeleteLoadBalancer(pCtx, clusterName, pService)
+	return mc.ObserveReconcile(err)
+}
+
+// ************************************************** PRIVATE METHODS **************************************************
+
+func (s *vLB) ensureLoadBalancer(
+	pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) ( // params
+	rLb *lCoreV1.LoadBalancerStatus, rErr error) { // returns
+
+	// Patcher the service to prevent the service is updated by other controller
+	patcher := newServicePatcher(s.kubeClient, pService)
+	defer func() {
+		rErr = patcher.Patch(pCtx, rErr)
+	}()
+
+	serviceKey := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
+	oldIngExpander, _ := s.inspectService(nil)
+	if oldService, ok := s.serviceCache[serviceKey]; ok {
+		oldIngExpander, _ = s.inspectService(oldService)
+	}
+	newIngExpander, err := s.inspectService(pService)
+	if err != nil {
+		klog.Errorln("error when inspect new ingress:", err)
+		return nil, err
+	}
+
+	lbID, _ := s.GetLoadbalancerIDByService(pService)
+	if lbID != "" {
+		newIngExpander.LbID = lbID
+	}
+	lbID, err = s.ensureLoadBalancerInstance(newIngExpander)
+	if err != nil {
+		klog.Errorln("error when ensure loadbalancer", err)
+		return nil, err
+	}
+
+	lb, err := s.actionCompareIngress(lbID, oldIngExpander, newIngExpander)
+	if err != nil {
+		klog.Errorln("error when compare ingress", err)
+		return nil, err
+	}
+
+	klog.V(5).Infof("processing load balancer status")
+	lbStatus := s.createLoadBalancerStatus(pService, lb)
+
+	userLb, _ := vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lb.UUID)
+	s.trackLBUpdate.AddUpdateTracker(userLb.UUID, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name), userLb.UpdatedAt)
+	s.serviceCache[serviceKey] = pService.DeepCopy()
+
+	klog.Infof(
+		"--- DONE--- Load balancer %s for service %s/%s is ready to use for Kubernetes controller",
+		lb.Name, pService.Namespace, pService.Name)
+	return lbStatus, nil
+}
+
+func (s *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
+	if pService.ObjectMeta.Annotations == nil {
+		pService.ObjectMeta.Annotations = map[string]string{}
+	}
+	// pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
+	pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = lb.Name
+
+	status := &lCoreV1.LoadBalancerStatus{}
+	// Default to IP
+	status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
+	return status
+}
+
+func (s *vLB) getProjectID() string {
+	return s.extraInfo.ProjectID
+}
+
+func (s *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+	lbID, err := s.GetLoadbalancerIDByService(pService)
+	if lbID == "" {
+		klog.Infof("Not found lbID to delete")
+		return nil
+	}
+	s.trackLBUpdate.RemoveUpdateTracker(lbID, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name))
+	if err != nil {
+		klog.Errorln("error when ensure loadbalancer", err)
+		return err
+	}
+
+	oldIngExpander, err := s.inspectService(pService)
+	if err != nil {
+		oldIngExpander, _ = s.inspectService(nil)
+	}
+	newIngExpander, err := s.inspectService(nil)
+	if err != nil {
+		klog.Errorln("error when inspect new service:", err)
+		return err
+	}
+
+	canDeleteAllLB := func(lbID string) bool {
+		getPool, err := vngcloudutil.ListPoolOfLB(s.vLBSC, s.getProjectID(), lbID)
+		if err != nil {
+			klog.Errorln("error when list pool of lb", err)
+			return false
+		}
+		getListener, err := vngcloudutil.ListListenerOfLB(s.vLBSC, s.getProjectID(), lbID)
+		if err != nil {
+			klog.Errorln("error when list listener of lb", err)
+			return false
+		}
+		if len(getPool) <= len(oldIngExpander.PoolExpander) && len(getListener) <= len(oldIngExpander.ListenerExpander) {
+			return true
+		}
+		return false
+	}
+	if canDeleteAllLB(lbID) {
+		klog.Infof("Delete load balancer %s because it is not used with other service.", lbID)
+		if err = vngcloudutil.DeleteLB(s.vLBSC, s.getProjectID(), lbID); err != nil {
+			klog.Errorln("error when delete lb", err)
+			return err
+		}
+		return nil
+	}
+
+	_, err = s.actionCompareIngress(lbID, oldIngExpander, newIngExpander)
+	if err != nil {
+		klog.Errorln("error when compare service", err)
+		return err
+	}
+	return nil
+}
+
+func (s *vLB) ensureGetLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
+	lbID, _ := s.GetLoadbalancerIDByService(pService)
+	if lbID == "" {
+		klog.Infof("Load balancer is not existed")
+		return nil, false, nil
+	}
+
+	lb, err := vngcloudutil.GetLB(s.vLBSC, s.getProjectID(), lbID)
+	if err != nil {
+		klog.Errorf("error when get lb: %v", err)
+		return nil, false, nil
+	}
+
+	lbStatus := s.createLoadBalancerStatus(pService, lb)
+	return lbStatus, true, nil
+}
+
+// ********************************************* DIRECTLY SUPPORT FUNCTIONS ********************************************
+func (s *vLB) addUpdatingThread() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.numOfUpdatingThread++
+}
+
+func (s *vLB) removeUpdatingThread() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.numOfUpdatingThread--
+}
+
+func (s *vLB) nodeSyncLoop() {
+	klog.Infoln("------------ nodeSyncLoop() ------------")
+	if s.numOfUpdatingThread > 0 {
+		klog.Infof("Skip nodeSyncLoop() because the controller is in the update mode.")
+		return
+	}
+	isReApply := false
+
+	lbs, err := vngcloudutil.ListLB(s.vLBSC, s.getProjectID())
+	if err != nil {
+		klog.Errorf("failed to find load balancers for cluster %s: %v", s.getClusterName(), err)
+		return
+	}
+	reapplyIngress := s.trackLBUpdate.GetReapplyIngress(lbs)
+	if len(reapplyIngress) > 0 {
+		isReApply = true
+		klog.Infof("Detected change in load balancer update tracker")
+		s.trackLBUpdate = utils.NewUpdateTracker()
+	}
+
+	if !isReApply {
+		return
+	}
+
+	readyWorkerNodes, err := utils.ListNodeWithPredicate(s.nodeLister, make(map[string]string, 0))
+	if err != nil {
+		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
+		return
+	}
+
+	services, err := utils.ListServiceWithPredicate(s.serviceLister)
+	if err != nil {
+		klog.Errorf("Failed to retrieve current set of services from service lister: %v", err)
+	}
+
+	for _, service := range services {
+		if _, err := s.EnsureLoadBalancer(context.Background(), s.getClusterName(), service, readyWorkerNodes); err != nil {
+			klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
+		}
+	}
+}
+
+func (s *vLB) getClusterName() string {
+	return s.config.Cluster.ClusterName
+}
+func (s *vLB) getClusterID() string {
+	return s.config.Cluster.ClusterID
+}
+
+func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, error) {
+	if pService == nil {
+		return &utils.IngressInspect{
+			DefaultPool:         nil,
+			PolicyExpander:      make([]*utils.PolicyExpander, 0),
+			PoolExpander:        make([]*utils.PoolExpander, 0),
+			ListenerExpander:    make([]*utils.ListenerExpander, 0),
+			CertificateExpander: make([]*utils.CertificateExpander, 0),
+			SecurityGroups:      make([]string, 0),
+		}, nil
+	}
+
+	plog := logrus.WithContext(context.Background()).WithFields(map[string]interface{}{
+		"Service": pService.Name,
+	})
+
+	// Check if the service spec has any port, if not, return error
+	ports := pService.Spec.Ports
+	if len(ports) <= 0 {
+		return nil, vErrors.NewErrServicePortEmpty()
+	}
+
+	ingressInspect := &utils.IngressInspect{
+		Name:                pService.Name,
+		Namespace:           pService.Namespace,
+		DefaultPool:         nil,
+		LbID:                "",
+		LbName:              "",
+		LbOptions:           CreateLoadbalancerOptions(pService),
+		PolicyExpander:      make([]*utils.PolicyExpander, 0),
+		PoolExpander:        make([]*utils.PoolExpander, 0),
+		ListenerExpander:    make([]*utils.ListenerExpander, 0),
+		CertificateExpander: make([]*utils.CertificateExpander, 0),
+		SecurityGroups:      make([]string, 0),
+		InstanceIDs:         make([]string, 0),
+	}
+
+	// check in annotation
+	nodeLabels := make(map[string]string)
+	if tnl, ok := pService.Annotations[ServiceAnnotationTargetNodeLabels]; ok {
+		nodeLabels = utils.ParseStringMapAnnotation(tnl, ServiceAnnotationTags)
+	}
+	if sgs, ok := pService.Annotations[ServiceAnnotationSecurityGroups]; ok {
+		ingressInspect.SecurityGroups = utils.ParseStringListAnnotation(sgs, ServiceAnnotationSecurityGroups)
+	}
+	if tags, ok := pService.Annotations[ServiceAnnotationTags]; ok {
+		ingressInspect.Tags = utils.ParseStringMapAnnotation(tags, ServiceAnnotationTags)
+	}
+	if lbID, ok := pService.Annotations[ServiceAnnotationLoadBalancerID]; ok {
+		ingressInspect.LbID = lbID
+	}
+	if lbName, ok := pService.Annotations[ServiceAnnotationLoadBalancerName]; ok {
+		ingressInspect.LbName = lbName
+	} else {
+		ingressInspect.LbName = utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+	}
+	ingressInspect.LbOptions.Name = ingressInspect.LbName
+
+	nodeObjs, err := utils.ListNodeWithPredicate(s.nodeLister, nodeLabels)
+	if len(nodeObjs) < 1 {
+		logrus.Errorf("No nodes found in the cluster")
+		return nil, vErrors.ErrNoNodeAvailable
+	}
+	if err != nil {
+		plog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
+		return nil, err
+	}
+	membersAddr := utils.GetNodeMembersAddr(nodeObjs)
+
+	// get subnetID of this ingress
+	providerIDs := utils.GetListProviderID(nodeObjs)
+	if len(providerIDs) < 1 {
+		plog.Errorf("No nodes found in the cluster")
+		return nil, vErrors.ErrNoNodeAvailable
+	}
+	plog.Infof("Found %d nodes for service, including of %v", len(providerIDs), providerIDs)
+	servers, err := vngcloudutil.ListProviderID(s.vServerSC, s.getProjectID(), providerIDs)
+	if err != nil {
+		plog.Errorf("Failed to get servers from the cloud - ERROR: %v", err)
+		return nil, err
+	}
+
+	// Check the nodes are in the same subnet
+	subnetID, retErr := vngcloudutil.EnsureNodesInCluster(servers)
+	if retErr != nil {
+		plog.Errorf("All node are not in a same subnet: %v", retErr)
+		return nil, retErr
+	}
+	ingressInspect.LbOptions.SubnetID = subnetID
+	ingressInspect.InstanceIDs = providerIDs
+
+	// Ensure pools and listener for this loadbalancer
+	for _, port := range pService.Spec.Ports {
+		poolName := utils.GenListenerAndPoolName(s.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
+
+		monitorPort := int(port.NodePort)
+		if p, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ok {
+			monitorPort = utils.ParseIntAnnotation(p, ServiceAnnotationHealthcheckPort, int(port.NodePort))
+		}
+
+		members := make([]*pool.Member, 0)
+		for _, addr := range membersAddr {
+			members = append(members, &pool.Member{
+				IpAddress:   addr,
+				Port:        int(port.NodePort),
+				Backup:      false,
+				Weight:      1,
+				Name:        poolName,
+				MonitorPort: monitorPort,
+			})
+		}
+		poolOptions := CreatePoolOptions(pService)
+		poolOptions.PoolName = poolName
+		poolOptions.Members = members
+
+		listenerOptions := CreateListenerOptions(pService, port)
+		listenerOptions.ListenerName = poolName
+
+		ingressInspect.PoolExpander = append(ingressInspect.PoolExpander, &utils.PoolExpander{
+			UUID:       "",
+			CreateOpts: *poolOptions,
+		})
+		ingressInspect.ListenerExpander = append(ingressInspect.ListenerExpander, &utils.ListenerExpander{
+			DefaultPoolName: poolName,
+			CreateOpts:      *listenerOptions,
+		})
+	}
+	return ingressInspect, nil
+}
+
+func (s *vLB) ensureLoadBalancerInstance(inspect *utils.IngressInspect) (string, error) {
+	if inspect.LbID == "" {
+		lb, err := vngcloudutil.CreateLB(s.vLBSC, s.getProjectID(), inspect.LbOptions)
+		if err != nil {
+			klog.Errorf("error when create new lb: %v", err)
+			return "", err
+		}
+		inspect.LbID = lb.UUID
+		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.LbID)
+	}
+
+	lb, err := vngcloudutil.GetLB(s.vLBSC, s.getProjectID(), inspect.LbID)
+	if err != nil {
+		klog.Errorf("error when get lb: %v", err)
+		return inspect.LbID, err
+	}
+
+	checkDetailLB := func() {
+		if lb.Name != inspect.LbName {
+			klog.Warningf("Load balancer name (%s) not match (%s)", lb.Name, inspect.LbName)
+		}
+		if lb.PackageID != inspect.LbOptions.PackageID {
+			klog.Info("Resize load-balancer package to: ", inspect.LbOptions.PackageID)
+			err := vngcloudutil.ResizeLB(s.vLBSC, s.getProjectID(), inspect.LbID, inspect.LbOptions.PackageID)
+			if err != nil {
+				klog.Errorf("error when resize lb: %v", err)
+				return
+			}
+			vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.LbID)
+		}
+		if lb.Internal != (inspect.LbOptions.Scheme == loadbalancer.CreateOptsSchemeOptInternal) {
+			klog.Warning("Load balancer scheme not match, must delete and recreate")
+		}
+	}
+	checkDetailLB()
+	return inspect.LbID, nil
+}
+
+func (s *vLB) GetLoadbalancerIDByService(pService *lCoreV1.Service) (string, error) {
+	lbsInSubnet, err := vngcloudutil.ListLB(s.vLBSC, s.getProjectID())
+	if err != nil {
+		klog.Errorf("error when list lb by subnet id: %v", err)
+		return "", err
+	}
+
+	// check in annotation lb id
+	if lbID, ok := pService.Annotations[ServiceAnnotationLoadBalancerID]; ok {
+		for _, lb := range lbsInSubnet {
+			if lb.UUID == lbID {
+				return lb.UUID, nil
+			}
+		}
+		klog.Infof("have annotation but not found lbID: %s", lbID)
+		return "", vErrors.ErrLoadBalancerIDNotFoundAnnotation
+	}
+
+	// check in annotation lb name
+	if lbName, ok := pService.Annotations[ServiceAnnotationLoadBalancerName]; ok {
+		for _, lb := range lbsInSubnet {
+			if lb.Name == lbName {
+				return lb.UUID, nil
+			}
+		}
+		klog.Errorf("have annotation but not found lbName: %s", lbName)
+		return "", vErrors.ErrLoadBalancerNameNotFoundAnnotation
+	} else {
+		// check in list lb name
+		lbName := utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+		for _, lb := range lbsInSubnet {
+			if lb.Name == lbName {
+				klog.Infof("Found lb match Name: %s", lbName)
+				return lb.UUID, nil
+			}
+		}
+		klog.Infof("Not found lb match Name: %s", lbName)
+	}
+
+	return "", vErrors.ErrNotFound
+}
+
+func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *utils.IngressInspect) (*lObjects.LoadBalancer, error) {
+	lb, err := vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	if err != nil {
+		klog.Errorln("error when wait for lb active", err)
+		return nil, err
+	}
+
+	// ensure all from newIngExpander
+	mapPoolNameIndex := make(map[string]int)
+	for poolIndex, ipool := range newIngExpander.PoolExpander {
+		newPool, err := s.ensurePoolV2(lb.UUID, &ipool.CreateOpts)
+		if err != nil {
+			klog.Errorln("error when ensure pool", err)
+			return nil, err
+		}
+		ipool.UUID = newPool.UUID
+		mapPoolNameIndex[ipool.PoolName] = poolIndex
+		_, err = s.ensurePoolMember(lb.UUID, newPool.UUID, ipool.Members)
+		if err != nil {
+			klog.Errorln("error when ensure pool member", err)
+			return nil, err
+		}
+	}
+	mapListenerNameIndex := make(map[string]int)
+	for listenerIndex, ilistener := range newIngExpander.ListenerExpander {
+		poolIndex, isHave := mapPoolNameIndex[ilistener.DefaultPoolName]
+		if !isHave {
+			klog.Errorf("pool not found in policy: %v", ilistener.DefaultPoolName)
+			return nil, err
+		}
+		ilistener.CreateOpts.DefaultPoolId = newIngExpander.PoolExpander[poolIndex].UUID
+
+		lis, err := s.ensureListenerV2(lb.UUID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
+		if err != nil {
+			klog.Errorln("error when ensure listener:", ilistener.CreateOpts.ListenerName, err)
+			return nil, err
+		}
+		ilistener.UUID = lis.UUID
+		mapListenerNameIndex[ilistener.CreateOpts.ListenerName] = listenerIndex
+	}
+
+	err = s.ensureSecurityGroups(newIngExpander.SecurityGroups, newIngExpander.InstanceIDs)
+	if err != nil {
+		klog.Errorln("error when ensure security groups", err)
+	}
+	err = s.ensureTags(lbID, newIngExpander.Tags)
+	if err != nil {
+		klog.Errorln("error when ensure security groups", err)
+	}
+
+	// delete redundant policy and pool if in oldIng
+	// with id from curLBExpander
+	klog.Infof("*************** DELETE REDUNDANT POLICY AND POOL *****************")
+	listenerWillUse := make(map[string]int)
+	for lIndex, lis := range newIngExpander.ListenerExpander {
+		listenerWillUse[lis.ListenerName] = lIndex
+	}
+	for _, oListener := range oldIngExpander.ListenerExpander {
+		_, isInUse := listenerWillUse[oListener.ListenerName]
+		if !isInUse {
+			klog.Warningf("listener not in use: %v, delete", oListener.ListenerName)
+			_, err := s.deleteListener(lb.UUID, oListener.ListenerName)
+			if err != nil {
+				klog.Errorln("error when ensure listener", err)
+				// maybe it's already deleted
+				// return nil, err
+			}
+		}
+	}
+
+	poolWillUse := make(map[string]bool)
+	for _, pool := range newIngExpander.PoolExpander {
+		poolWillUse[pool.PoolName] = true
+	}
+	for _, oldIngPool := range oldIngExpander.PoolExpander {
+		_, isPoolWillUse := poolWillUse[oldIngPool.PoolName]
+		if !isPoolWillUse && oldIngPool.PoolName != consts.DEFAULT_NAME_DEFAULT_POOL {
+			klog.Warningf("pool not in use: %v, delete", oldIngPool.PoolName)
+			_, err := s.deletePool(lb.UUID, oldIngPool.PoolName)
+			if err != nil {
+				klog.Errorln("error when ensure pool", err)
+				// maybe it's already deleted
+				// return nil, err
+			}
+		} else {
+			klog.Infof("pool in use: %v, not delete", oldIngPool.PoolName)
+		}
+	}
+	return lb, nil
+}
+
+func (s *vLB) ensurePoolV2(lbID string, poolOptions *pool.CreateOpts) (*lObjects.Pool, error) {
+	ipool, err := vngcloudutil.FindPoolByName(s.vLBSC, s.getProjectID(), lbID, poolOptions.PoolName)
+	if err != nil {
+		if err == vErrors.ErrNotFound {
+			_, err := vngcloudutil.CreatePool(s.vLBSC, s.getProjectID(), lbID, poolOptions)
+			if err != nil {
+				klog.Errorln("error when create new pool", err)
+				return nil, err
+			}
+			vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+			ipool, err = vngcloudutil.FindPoolByName(s.vLBSC, s.getProjectID(), lbID, poolOptions.PoolName)
+			if err != nil {
+				klog.Errorln("error when find pool", err)
+				return nil, err
+			}
+		} else {
+			klog.Errorln("error when find pool", err)
+			return nil, err
+		}
+	}
+
+	updateOptions := vngcloudutil.ComparePoolOptions(ipool, poolOptions)
+	if updateOptions != nil {
+		err := vngcloudutil.UpdatePool(s.vLBSC, s.getProjectID(), lbID, ipool.UUID, updateOptions)
+		if err != nil {
+			klog.Errorln("error when update pool", err)
+			return nil, err
+		}
+		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	}
+	return ipool, nil
+}
+func (s *vLB) deletePool(lbID, poolName string) (*lObjects.Pool, error) {
+	iPool, err := vngcloudutil.FindPoolByName(s.vLBSC, s.getProjectID(), lbID, poolName)
+	if err != nil {
+		if err == vErrors.ErrNotFound {
+			klog.Infof("pool not found: %s, maybe deleted", poolName)
+			return nil, nil
+		} else {
+			klog.Errorln("error when find pool", err)
+			return nil, err
+		}
+	}
+
+	err = vngcloudutil.DeletePool(s.vLBSC, s.getProjectID(), lbID, iPool.UUID)
+	if err != nil {
+		klog.Errorln("error when delete pool", err)
+		return nil, err
+	}
+
+	vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	return iPool, nil
+}
+
+func (s *vLB) ensurePoolMember(lbID, poolID string, members []*pool.Member) (*lObjects.Pool, error) {
+	memsGet, err := vngcloudutil.GetMemberPool(s.vLBSC, s.getProjectID(), lbID, poolID)
+	memsGetConvert := vngcloudutil.ConvertObjectToPoolMemberArray(memsGet)
+	if err != nil {
+		klog.Errorln("error when get pool members", err)
+		return nil, err
+	}
+	if !vngcloudutil.ComparePoolMembers(members, memsGetConvert) {
+		err := vngcloudutil.UpdatePoolMember(s.vLBSC, s.getProjectID(), lbID, poolID, members)
+		if err != nil {
+			klog.Errorln("error when update pool members", err)
+			return nil, err
+		}
+		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	}
+	return nil, nil
+}
+
+func (s *vLB) ensureListenerV2(lbID, lisName string, listenerOpts listener.CreateOpts) (*lObjects.Listener, error) {
+	lis, err := vngcloudutil.FindListenerByPort(s.vLBSC, s.getProjectID(), lbID, listenerOpts.ListenerProtocolPort)
+	if err != nil {
+		if err == vErrors.ErrNotFound {
+			// create listener point to default pool
+			listenerOpts.ListenerName = lisName
+			_, err := vngcloudutil.CreateListener(s.vLBSC, s.getProjectID(), lbID, &listenerOpts)
+			if err != nil {
+				klog.Errorln("error when create listener", err)
+				return nil, err
+			}
+			vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+			lis, err = vngcloudutil.FindListenerByPort(s.vLBSC, s.getProjectID(), lbID, listenerOpts.ListenerProtocolPort)
+			if err != nil {
+				klog.Errorln("error when find listener", err)
+				return nil, err
+			}
+		} else {
+			klog.Errorln("error when find listener", err)
+			return nil, err
+		}
+	}
+
+	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)
+	if updateOpts != nil {
+		err := vngcloudutil.UpdateListener(s.vLBSC, s.getProjectID(), lbID, lis.UUID, updateOpts)
+		if err != nil {
+			klog.Error("error when update listener: ", err)
+			return nil, err
+		}
+		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	}
+
+	return lis, nil
+}
+
+func (s *vLB) deleteListener(lbID, listenerName string) (*lObjects.Listener, error) {
+	ilistener, err := vngcloudutil.FindListenerByName(s.vLBSC, s.getProjectID(), lbID, listenerName)
+	if err != nil {
+		if err == vErrors.ErrNotFound {
+			klog.Infof("listener not found: %s, maybe deleted", listenerName)
+			return nil, nil
+		} else {
+			klog.Errorln("error when find listener to delete:", err)
+			return nil, err
+		}
+	}
+	err = vngcloudutil.DeleteListener(s.vLBSC, s.getProjectID(), lbID, ilistener.UUID)
+	if err != nil {
+		klog.Errorln("error when delete listener", err)
+		return nil, err
+	}
+	vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
+	return ilistener, nil
+}
+
+func (s *vLB) ensureSecurityGroups(secgroups, instances []string) error {
+	if len(secgroups) < 1 || len(instances) < 1 {
+		return nil
+	}
+	// validate security groups
+	validSecgroups := make([]string, 0)
+	getSecgroups, err := vngcloudutil.ListSecurityGroups(s.vServerSC, s.getProjectID())
+	if err != nil {
+		klog.Errorln("error when list security groups", err)
+		return err
+	}
+	mapSecgroups := make(map[string]bool)
+	for _, secgroup := range getSecgroups {
+		mapSecgroups[secgroup.UUID] = true
+	}
+	for _, secgroup := range secgroups {
+		if _, isHave := mapSecgroups[secgroup]; !isHave {
+			klog.Errorf("security group not found: %v", secgroup)
+		} else {
+			validSecgroups = append(validSecgroups, secgroup)
+		}
+	}
+
+	ensureSecGroupsForInstance := func(instanceID string, secgroups []string) error {
+		// get security groups of instance
+		instance, err := vngcloudutil.GetServer(s.vServerSC, s.getProjectID(), instanceID)
+		if err != nil {
+			klog.Errorln("error when get instance", err)
+			return err
+		}
+		// merge security groups
+		secgroupMap := make(map[string]bool)
+		for _, secgroup := range instance.SecGroups {
+			secgroupMap[secgroup.Uuid] = true
+		}
+		isNeedUpdate := false
+		for _, secgroup := range secgroups {
+			if _, isHave := secgroupMap[secgroup]; !isHave {
+				isNeedUpdate = true
+				secgroupMap[secgroup] = true
+			}
+		}
+		if !isNeedUpdate {
+			klog.Infof("No need to update security groups for instance: %v", instanceID)
+			return nil
+		}
+		// update security groups
+		secgroupArr := make([]string, 0)
+		for secgroup := range secgroupMap {
+			secgroupArr = append(secgroupArr, secgroup)
+		}
+		_, err = vngcloudutil.UpdateSecGroups(s.vServerSC, s.getProjectID(), instanceID, secgroupArr)
+		return err
+	}
+	for _, instanceID := range instances {
+		err := ensureSecGroupsForInstance(instanceID, validSecgroups)
+		if err != nil {
+			klog.Errorln("error when ensure security groups for instance", err)
+		}
+	}
+	return nil
+}
+
+func (s *vLB) ensureTags(lbID string, tags map[string]string) error {
+	if len(tags) < 1 {
+		return nil
+	}
+	// get tags of lb
+	getTags, err := vngcloudutil.GetTags(s.vServerSC, s.getProjectID(), lbID)
+	if err != nil {
+		klog.Errorln("error when get tags", err)
+		return err
+	}
+	// merge tags
+	tagMap := make(map[string]string)
+	for _, tag := range getTags {
+		tagMap[tag.Key] = tag.Value
+	}
+	isNeedUpdate := false
+	for key, value := range tags {
+		if tagMap[key] != value {
+			isNeedUpdate = true
+			tagMap[key] = value
+		}
+	}
+	if !isNeedUpdate {
+		klog.Infof("No need to update tags for lb: %v", lbID)
+		return nil
+	}
+	// update tags
+	err = vngcloudutil.UpdateTags(s.vServerSC, s.getProjectID(), lbID, tagMap)
+	return err
+}

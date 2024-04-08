@@ -20,5 +20,8 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
-
 .idea
+
+/vngcloud-controller-manager
+/vngcloud-ingress-controller
+.go
