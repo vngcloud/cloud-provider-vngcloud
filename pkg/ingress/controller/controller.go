@@ -1295,7 +1295,7 @@ func (c *Controller) ensurePool(lbID string, poolOptions *pool.CreateOpts) (*lOb
 		}
 	}
 
-	updateOptions := comparePoolOptions(ipool, poolOptions)
+	updateOptions := vngcloudutil.ComparePoolOptions(ipool, poolOptions)
 	if updateOptions != nil {
 		err := vngcloudutil.UpdatePool(c.vLBSC, c.getProjectID(), lbID, ipool.UUID, updateOptions)
 		if err != nil {
@@ -1398,7 +1398,7 @@ func (c *Controller) ensureListener(lbID, lisName string, listenerOpts listener.
 		}
 	}
 
-	updateOpts := compareListenerOptions(lis, &listenerOpts)
+	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)
 	if updateOpts != nil {
 		err := vngcloudutil.UpdateListener(c.vLBSC, c.getProjectID(), lbID, lis.UUID, updateOpts)
 		if err != nil {

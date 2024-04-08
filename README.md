@@ -1,4 +1,4 @@
-# vngcloud-controller-manager
+# cloud-provider-vngcloud
 
 ![dev-staging-env](https://badgen.net/badge/DEV-STAGING/environment/blue?icon=github)
 
