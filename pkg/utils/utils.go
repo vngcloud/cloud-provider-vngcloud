@@ -383,3 +383,32 @@ func matchCloudProviderPattern(pproviderID string) bool {
 func getProviderID(pnode *apiv1.Node) string {
 	return pnode.Spec.ProviderID[len(rawPrefix):len(pnode.Spec.ProviderID)]
 }
+
+func MergeStringArray(current, remove, add []string) ([]string, bool) {
+	klog.V(5).Infof("current: %v", current)
+	klog.V(5).Infof("remove:  %v", remove)
+	klog.V(5).Infof("add:     %v", add)
+	mapCurrent := make(map[string]bool)
+	for _, c := range current {
+		mapCurrent[c] = true
+	}
+	for _, r := range remove {
+		delete(mapCurrent, r)
+	}
+	for _, a := range add {
+		mapCurrent[a] = true
+	}
+	ret := make([]string, 0)
+	for k := range mapCurrent {
+		ret = append(ret, k)
+	}
+	if len(ret) != len(current) {
+		return ret, true
+	}
+	for _, c := range current {
+		if !mapCurrent[c] {
+			return ret, true
+		}
+	}
+	return ret, false
+}

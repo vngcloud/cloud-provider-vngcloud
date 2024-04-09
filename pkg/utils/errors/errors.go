@@ -166,6 +166,7 @@ var (
 	ErrVngCloudNotReturnNilListenerObject = vErr.New("VNG CLOUD should not return nil listener object")
 	ErrIngressNotFound                    = vErr.New("failed to find ingress")
 	ErrSecurityGroupNotFound              = vErr.New("failed to find security group")
+	ErrNetworkIDNotFound                  = vErr.New("failed to find network ID")
 )
 
 var ErrLoadBalancerIDNotFoundAnnotation = vErr.New("failed to find LoadBalancerID from Annotation")

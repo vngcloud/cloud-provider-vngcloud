@@ -7,6 +7,7 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/policy"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	"k8s.io/klog/v2"
 )
 
@@ -42,21 +43,29 @@ type CertificateExpander struct {
 	SecretName string
 }
 
-type IngressInspect struct {
-	DefaultPool *PoolExpander
-	Name        string
-	Namespace   string
-	LbID        string                   // store the lb id
-	LbName      string                   // auto generate or pass by user through annotation
-	LbOptions   *loadbalancer.CreateOpts // create options for lb
+type SecGroupRuleExpander struct {
+	UUID string
+	secgroup_rule.CreateOpts
+}
 
-	PolicyExpander      []*PolicyExpander
-	PoolExpander        []*PoolExpander
-	ListenerExpander    []*ListenerExpander
-	CertificateExpander []*CertificateExpander
-	SecurityGroups      []string
-	InstanceIDs         []string
-	Tags                map[string]string
+type IngressInspect struct {
+	DefaultPool               *PoolExpander
+	Name                      string
+	Namespace                 string
+	LbID                      string                   // store the lb id
+	LbName                    string                   // auto generate or pass by user through annotation
+	LbOptions                 *loadbalancer.CreateOpts // create options for lb
+	IsAutoCreateSecurityGroup bool
+	AllowCIDR                 string
+
+	PolicyExpander       []*PolicyExpander
+	PoolExpander         []*PoolExpander
+	ListenerExpander     []*ListenerExpander
+	CertificateExpander  []*CertificateExpander
+	SecurityGroups       []string
+	InstanceIDs          []string
+	Tags                 map[string]string
+	SecGroupRuleExpander []*SecGroupRuleExpander
 }
 
 func (ing *IngressInspect) Print() {

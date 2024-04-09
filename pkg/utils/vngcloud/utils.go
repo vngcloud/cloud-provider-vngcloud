@@ -86,3 +86,14 @@ func listSubnetIDs(s *lObjects.Server) []string {
 
 	return subnets
 }
+
+func GetNetworkID(pserver []*lObjects.Server, pSubnetID string) string {
+	for _, server := range pserver {
+		for _, subnet := range server.InternalInterfaces {
+			if subnet.SubnetUuid == pSubnetID {
+				return subnet.NetworkUuid
+			}
+		}
+	}
+	return ""
+}

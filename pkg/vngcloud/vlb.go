@@ -19,6 +19,7 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	lCoreV1 "k8s.io/api/core/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -374,6 +375,9 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 			ListenerExpander:    make([]*utils.ListenerExpander, 0),
 			CertificateExpander: make([]*utils.CertificateExpander, 0),
 			SecurityGroups:      make([]string, 0),
+
+			IsAutoCreateSecurityGroup: false,
+			SecGroupRuleExpander:      make([]*utils.SecGroupRuleExpander, 0),
 		}, nil
 	}
 
@@ -400,6 +404,9 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		CertificateExpander: make([]*utils.CertificateExpander, 0),
 		SecurityGroups:      make([]string, 0),
 		InstanceIDs:         make([]string, 0),
+
+		IsAutoCreateSecurityGroup: true,
+		SecGroupRuleExpander:      make([]*utils.SecGroupRuleExpander, 0),
 	}
 
 	// check in annotation
@@ -408,6 +415,7 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		nodeLabels = utils.ParseStringMapAnnotation(tnl, ServiceAnnotationTags)
 	}
 	if sgs, ok := pService.Annotations[ServiceAnnotationSecurityGroups]; ok {
+		ingressInspect.IsAutoCreateSecurityGroup = false
 		ingressInspect.SecurityGroups = utils.ParseStringListAnnotation(sgs, ServiceAnnotationSecurityGroups)
 	}
 	if tags, ok := pService.Annotations[ServiceAnnotationTags]; ok {
@@ -420,6 +428,23 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		ingressInspect.LbName = lbName
 	} else {
 		ingressInspect.LbName = utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+	}
+	if port, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ingressInspect.IsAutoCreateSecurityGroup && ok {
+		mPort := utils.ParseIntAnnotation(port, ServiceAnnotationHealthcheckPort, 0)
+		if mPort > 0 {
+			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
+				CreateOpts: secgroup_rule.CreateOpts{
+					Description:     "monitor port",
+					Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
+					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
+					PortRangeMax:    int(mPort),
+					PortRangeMin:    int(mPort),
+					Protocol:        secgroup_rule.CreateOptsProtocolOptTCP, // ............................ from annotation healthcheck protocol
+					RemoteIPPrefix:  "",                                     // subnet mask
+					SecurityGroupID: "",                                     // will be set later
+				},
+			})
+		}
 	}
 	ingressInspect.LbOptions.Name = ingressInspect.LbName
 
@@ -453,6 +478,21 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		plog.Errorf("All node are not in a same subnet: %v", retErr)
 		return nil, retErr
 	}
+	if option, ok := pService.Annotations[ServiceAnnotationInboundCIDRs]; ok {
+		ingressInspect.AllowCIDR = option
+	} else {
+		networkID := vngcloudutil.GetNetworkID(servers, subnetID)
+		if networkID == "" {
+			klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
+			return nil, vErrors.ErrNetworkIDNotFound
+		}
+		subnet, err := vngcloudutil.GetSubnet(s.vServerSC, s.getProjectID(), networkID, subnetID)
+		if err != nil {
+			klog.Errorf("Failed to get subnet: %v", err)
+			return nil, err
+		}
+		ingressInspect.AllowCIDR = subnet.CIDR
+	}
 	ingressInspect.LbOptions.SubnetID = subnetID
 	ingressInspect.InstanceIDs = providerIDs
 
@@ -479,6 +519,21 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		poolOptions := CreatePoolOptions(pService)
 		poolOptions.PoolName = poolName
 		poolOptions.Members = members
+
+		if ingressInspect.IsAutoCreateSecurityGroup {
+			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
+				CreateOpts: secgroup_rule.CreateOpts{
+					Description:     fmt.Sprintf("%s-%s-%d", pService.ObjectMeta.Namespace, pService.Name, int(port.Port)),
+					Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
+					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
+					PortRangeMax:    int(port.NodePort),
+					PortRangeMin:    int(port.NodePort),
+					Protocol:        secgroup_rule.CreateOptsProtocolOptTCP,
+					RemoteIPPrefix:  "", // subnet mask
+					SecurityGroupID: "", // will be set later
+				},
+			})
+		}
 
 		listenerOptions := CreateListenerOptions(pService, port)
 		listenerOptions.ListenerName = poolName
@@ -616,7 +671,7 @@ func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 		mapListenerNameIndex[ilistener.CreateOpts.ListenerName] = listenerIndex
 	}
 
-	err = s.ensureSecurityGroups(newIngExpander.SecurityGroups, newIngExpander.InstanceIDs)
+	err = s.ensureSecurityGroups(oldIngExpander, newIngExpander)
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}
@@ -794,22 +849,87 @@ func (s *vLB) deleteListener(lbID, listenerName string) (*lObjects.Listener, err
 	return ilistener, nil
 }
 
-func (s *vLB) ensureSecurityGroups(secgroups, instances []string) error {
-	if len(secgroups) < 1 || len(instances) < 1 {
-		return nil
-	}
-	// validate security groups
-	validSecgroups := make([]string, 0)
-	getSecgroups, err := vngcloudutil.ListSecurityGroups(s.vServerSC, s.getProjectID())
+func (s *vLB) ensureSecurityGroups(oldInspect, inspect *utils.IngressInspect) error {
+	var listSecgroups []*lObjects.Secgroup
+	listSecgroups, err := vngcloudutil.ListSecurityGroups(s.vServerSC, s.getProjectID())
 	if err != nil {
 		klog.Errorln("error when list security groups", err)
 		return err
 	}
+	defaultSecgroupName := utils.GenerateLBName(s.getClusterID(), inspect.Namespace, inspect.Name, consts.RESOURCE_TYPE_SERVICE)
+	var defaultSecgroup *lObjects.Secgroup = nil
+	for _, secgroup := range listSecgroups {
+		if secgroup.Name == defaultSecgroupName {
+			defaultSecgroup = secgroup
+		}
+	}
+
+	if inspect.IsAutoCreateSecurityGroup {
+		if defaultSecgroup == nil {
+			defaultSecgroup, err = vngcloudutil.CreateSecurityGroup(s.vServerSC, s.getProjectID(), defaultSecgroupName, "Automatically created using VNGCLOUD Controller Manager")
+			if err != nil {
+				klog.Errorln("error when create security group", err)
+				return err
+			}
+		}
+		defaultSecgroup, err := vngcloudutil.GetSecurityGroup(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID)
+		if err != nil {
+			klog.Errorln("error when get default security group", err)
+			return err
+		}
+		ensureDefaultSecgroupRule := func() error {
+			// clear all inbound rules
+			secgroupRules, err := vngcloudutil.ListSecurityGroupRules(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID)
+			if err != nil {
+				klog.Errorln("error when list security group rules", err)
+				return err
+			}
+			for _, rule := range secgroupRules {
+				if rule.Direction == string(secgroup_rule.CreateOptsDirectionOptIngress) {
+					err := vngcloudutil.DeleteSecurityGroupRule(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID, rule.UUID)
+					if err != nil {
+						klog.Errorln("error when delete security group rule", err)
+						return err
+					}
+				}
+			}
+
+			for _, rule := range inspect.SecGroupRuleExpander {
+				rule.CreateOpts.SecurityGroupID = defaultSecgroup.UUID
+				rule.CreateOpts.RemoteIPPrefix = inspect.AllowCIDR
+				_, err := vngcloudutil.CreateSecurityGroupRule(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID, &rule.CreateOpts)
+				if err != nil {
+					klog.Errorln("error when create security group rule", err)
+					return err
+				}
+			}
+			return nil
+		}
+		ensureDefaultSecgroupRule()
+		inspect.SecurityGroups = []string{defaultSecgroup.UUID}
+	}
+	if len(inspect.SecurityGroups) < 1 || len(inspect.InstanceIDs) < 1 {
+		return nil
+	}
+
+	// add default security group to old inspect
+	if oldInspect != nil && oldInspect.IsAutoCreateSecurityGroup && defaultSecgroup != nil {
+		oldInspect.SecurityGroups = append(oldInspect.SecurityGroups, defaultSecgroup.UUID)
+	}
+
+	listSecgroups, err = vngcloudutil.ListSecurityGroups(s.vServerSC, s.getProjectID())
+	if err != nil {
+		klog.Errorln("error when list security groups", err)
+		return err
+	}
+
+	// validate security groups
+	validSecgroups := make([]string, 0)
 	mapSecgroups := make(map[string]bool)
-	for _, secgroup := range getSecgroups {
+	for _, secgroup := range listSecgroups {
 		mapSecgroups[secgroup.UUID] = true
 	}
-	for _, secgroup := range secgroups {
+	for _, secgroup := range inspect.SecurityGroups {
 		if _, isHave := mapSecgroups[secgroup]; !isHave {
 			klog.Errorf("security group not found: %v", secgroup)
 		} else {
@@ -817,39 +937,27 @@ func (s *vLB) ensureSecurityGroups(secgroups, instances []string) error {
 		}
 	}
 
-	ensureSecGroupsForInstance := func(instanceID string, secgroups []string) error {
+	ensureSecGroupsForInstance := func(instanceID string, oldSecgroups, secgroups []string) error {
 		// get security groups of instance
 		instance, err := vngcloudutil.GetServer(s.vServerSC, s.getProjectID(), instanceID)
 		if err != nil {
 			klog.Errorln("error when get instance", err)
 			return err
 		}
-		// merge security groups
-		secgroupMap := make(map[string]bool)
+		currentSecgroups := make([]string, 0)
 		for _, secgroup := range instance.SecGroups {
-			secgroupMap[secgroup.Uuid] = true
+			currentSecgroups = append(currentSecgroups, secgroup.Uuid)
 		}
-		isNeedUpdate := false
-		for _, secgroup := range secgroups {
-			if _, isHave := secgroupMap[secgroup]; !isHave {
-				isNeedUpdate = true
-				secgroupMap[secgroup] = true
-			}
-		}
+		newSecgroups, isNeedUpdate := utils.MergeStringArray(currentSecgroups, oldSecgroups, secgroups)
 		if !isNeedUpdate {
 			klog.Infof("No need to update security groups for instance: %v", instanceID)
 			return nil
 		}
-		// update security groups
-		secgroupArr := make([]string, 0)
-		for secgroup := range secgroupMap {
-			secgroupArr = append(secgroupArr, secgroup)
-		}
-		_, err = vngcloudutil.UpdateSecGroups(s.vServerSC, s.getProjectID(), instanceID, secgroupArr)
+		_, err = vngcloudutil.UpdateSecGroupsOfServer(s.vServerSC, s.getProjectID(), instanceID, newSecgroups)
 		return err
 	}
-	for _, instanceID := range instances {
-		err := ensureSecGroupsForInstance(instanceID, validSecgroups)
+	for _, instanceID := range inspect.InstanceIDs {
+		err := ensureSecGroupsForInstance(instanceID, oldInspect.SecurityGroups, validSecgroups)
 		if err != nil {
 			klog.Errorln("error when ensure security groups for instance", err)
 		}

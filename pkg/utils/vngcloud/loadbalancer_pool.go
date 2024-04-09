@@ -43,7 +43,7 @@ func ListPoolOfLB(client *client.ServiceClient, projectID string, lbID string) (
 func UpdatePoolMember(client *client.ServiceClient, projectID string, lbID, poolID string, mems []*pool.Member) error {
 	klog.V(5).Infoln("[API] UpdatePoolMember: ", "poolID: ", poolID)
 	for _, mem := range mems {
-		klog.V(5).Infof("[%s, %s, %d]", mem.Name, mem.IpAddress, mem.Port)
+		klog.V(5).Infof("[%s, %s, %d, %d]", mem.Name, mem.IpAddress, mem.Port, mem.MonitorPort)
 	}
 	opt := &pool.UpdatePoolMembersOpts{
 		Members: mems,
