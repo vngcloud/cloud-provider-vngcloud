@@ -1,6 +1,8 @@
 package vngcloud
 
 import (
+	"time"
+
 	"github.com/vngcloud/vngcloud-go-sdk/client"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/objects"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/compute/v2/server"
@@ -28,4 +30,20 @@ func ListProviderID(client *client.ServiceClient, projectID string, providerIDs 
 		}
 	}
 	return servers, nil
+}
+
+func WaitForServerActive(client *client.ServiceClient, projectID string, id string) {
+	for {
+		lb, err := GetServer(client, projectID, id)
+		if err != nil {
+			klog.Errorln("error when get server status: ", err)
+		} else if lb.Status == "ACTIVE" {
+			return
+		} else if lb.Status == "ERROR" {
+			klog.Error("Server is in ERROR state")
+			return
+		}
+		klog.V(3).Infoln("------- wait for server active:", lb.Status, "-------")
+		time.Sleep(10 * time.Second)
+	}
 }

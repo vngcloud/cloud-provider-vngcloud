@@ -118,3 +118,29 @@ func MapIDExpander(old, cur *IngressInspect) {
 		}
 	}
 }
+
+func (ing *IngressInspect) AddSecgroupRule(port int, protocol secgroup_rule.CreateOptsProtocolOpt) {
+	isExist := false
+	for _, rule := range ing.SecGroupRuleExpander {
+		if rule.PortRangeMax == port &&
+			rule.PortRangeMin == port &&
+			rule.Protocol == protocol {
+			isExist = true
+			break
+		}
+	}
+	if !isExist {
+		ing.SecGroupRuleExpander = append(ing.SecGroupRuleExpander, &SecGroupRuleExpander{
+			CreateOpts: secgroup_rule.CreateOpts{
+				Description:     "",
+				Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
+				EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
+				PortRangeMax:    port,
+				PortRangeMin:    port,
+				Protocol:        protocol,
+				RemoteIPPrefix:  "",
+				SecurityGroupID: "",
+			},
+		})
+	}
+}

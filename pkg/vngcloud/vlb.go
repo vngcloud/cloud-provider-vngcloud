@@ -190,7 +190,11 @@ func (s *vLB) ensureLoadBalancer(
 		return nil, err
 	}
 
-	lbID, err := s.ensureLoadBalancerInstance(newIngExpander)
+	lbID, _ := s.GetLoadbalancerIDByService(pService)
+	if lbID != "" {
+		newIngExpander.serviceConf.LoadBalancerID = lbID
+	}
+	lbID, err = s.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
@@ -467,6 +471,10 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		monitorPort := int(port.NodePort)
 		if serviceConf.HealthcheckPort != 0 {
 			monitorPort = serviceConf.HealthcheckPort
+			if serviceConf.IsAutoCreateSecurityGroup {
+				ingressInspect.AddSecgroupRule(monitorPort,
+					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
+			}
 		}
 
 		members := make([]*pool.Member, 0)
@@ -485,18 +493,10 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		poolOptions.Members = members
 
 		if serviceConf.IsAutoCreateSecurityGroup {
-			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
-				CreateOpts: secgroup_rule.CreateOpts{
-					Description:     fmt.Sprintf("%s-%s-%d", pService.ObjectMeta.Namespace, pService.Name, int(port.Port)),
-					Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
-					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
-					PortRangeMax:    int(port.NodePort),
-					PortRangeMin:    int(port.NodePort),
-					Protocol:        vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)),
-					RemoteIPPrefix:  "", // subnet mask
-					SecurityGroupID: "", // will be set later
-				},
-			})
+			if serviceConf.IsAutoCreateSecurityGroup {
+				ingressInspect.AddSecgroupRule(int(port.NodePort),
+					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
+			}
 		}
 
 		listenerOptions := serviceConf.CreateListenerOptions(port)
@@ -921,6 +921,7 @@ func (s *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			return nil
 		}
 		_, err = vngcloudutil.UpdateSecGroupsOfServer(s.vServerSC, s.getProjectID(), instanceID, newSecgroups)
+		vngcloudutil.WaitForServerActive(s.vServerSC, s.getProjectID(), instanceID)
 		return err
 	}
 	for _, instanceID := range inspect.InstanceIDs {

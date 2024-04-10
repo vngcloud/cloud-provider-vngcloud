@@ -894,6 +894,9 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		monitorPort := nodePort
 		if serviceConf.HealthcheckPort != 0 {
 			monitorPort = serviceConf.HealthcheckPort
+			if serviceConf.IsAutoCreateSecurityGroup {
+				ingressInspect.AddSecgroupRule(monitorPort, secgroup_rule.CreateOptsProtocolOptTCP)
+			}
 		}
 
 		members := make([]*pool.Member, 0)
@@ -912,18 +915,7 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		poolOptions.Members = members
 
 		if serviceConf.IsAutoCreateSecurityGroup {
-			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
-				CreateOpts: secgroup_rule.CreateOpts{
-					Description:     fmt.Sprintf("%s-%s-%d", ing.ObjectMeta.Namespace, service.Name, int(service.Port.Number)),
-					Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
-					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
-					PortRangeMax:    int(nodePort),
-					PortRangeMin:    int(nodePort),
-					Protocol:        secgroup_rule.CreateOptsProtocolOptTCP,
-					RemoteIPPrefix:  "", // subnet mask
-					SecurityGroupID: "", // will be set later
-				},
-			})
+			ingressInspect.AddSecgroupRule(int(nodePort), secgroup_rule.CreateOptsProtocolOptTCP)
 		}
 		return &utils.PoolExpander{
 			UUID:       "",
@@ -1026,7 +1018,11 @@ func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.
 		return nil, err
 	}
 
-	lbID, err := c.ensureLoadBalancerInstance(newIngExpander)
+	lbID, _ := c.GetLoadbalancerIDByIngress(ing)
+	if lbID != "" {
+		newIngExpander.serviceConf.LoadBalancerID = lbID
+	}
+	lbID, err = c.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
@@ -1594,6 +1590,7 @@ func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			return nil
 		}
 		_, err = vngcloudutil.UpdateSecGroupsOfServer(c.vServerSC, c.getProjectID(), instanceID, newSecgroups)
+		vngcloudutil.WaitForServerActive(c.vServerSC, c.getProjectID(), instanceID)
 		return err
 	}
 	for _, instanceID := range inspect.InstanceIDs {
