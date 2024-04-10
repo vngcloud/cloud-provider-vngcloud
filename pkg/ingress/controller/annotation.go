@@ -18,11 +18,11 @@ const (
 
 // Annotations
 const (
-	ServiceAnnotationSubnetID              = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/subnet-id"  // both annotation and cloud-config
-	ServiceAnnotationNetworkID             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/network-id" // both annotation and cloud-config
-	ServiceAnnotationOwnedListeners        = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/owned-listeners"
-	ServiceAnnotationCloudLoadBalancerName = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/cloud-loadbalancer-name" // set via annotation
-	ServiceAnnotationLoadBalancerOwner     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/load-balancer-owner"
+	// ServiceAnnotationSubnetID              = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/subnet-id"  // both annotation and cloud-config
+	// ServiceAnnotationNetworkID             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/network-id" // both annotation and cloud-config
+	// ServiceAnnotationOwnedListeners        = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/owned-listeners"
+	// ServiceAnnotationCloudLoadBalancerName = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/cloud-loadbalancer-name" // set via annotation
+	// ServiceAnnotationLoadBalancerOwner     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/load-balancer-owner"
 
 	// Node annotations
 	ServiceAnnotationTargetNodeLabels = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/target-node-labels"
@@ -39,7 +39,7 @@ const (
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
 	ServiceAnnotationIdleTimeoutMember     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-member"     // both annotation and cloud-config
 	ServiceAnnotationIdleTimeoutConnection = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-connection" // both annotation and cloud-config
-	ServiceAnnotationInboundCIDRs          = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/inbound-cidrs"
+	ServiceAnnotationInboundCIDRs          = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/inbound-cidrs"           // call only 1 time .......................
 
 	// Pool annotations
 	ServiceAnnotationPoolAlgorithm       = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/pool-algorithm" // both annotation and cloud-config
@@ -66,21 +66,76 @@ func PointerOf[T any](t T) *T {
 	return &t
 }
 
-func CreateLoadbalancerOptions(ing *nwv1.Ingress) *loadbalancer.CreateOpts {
-	opt := &loadbalancer.CreateOpts{
-		Name:      "",
-		PackageID: consts.DEFAULT_L7_PACKAGE_ID,
-		Scheme:    loadbalancer.CreateOptsSchemeOptInternal,
-		SubnetID:  "",
-		Type:      loadbalancer.CreateOptsTypeOptLayer7,
+type IngressConfig struct {
+	LoadBalancerID             string
+	LoadBalancerName           string
+	LoadBalancerType           loadbalancer.CreateOptsTypeOpt
+	PackageID                  string
+	Scheme                     loadbalancer.CreateOptsSchemeOpt
+	IdleTimeoutClient          int
+	IdleTimeoutMember          int
+	IdleTimeoutConnection      int
+	InboundCIDRs               string
+	HealthcheckProtocol        pool.CreateOptsHealthCheckProtocolOpt
+	HealthcheckHttpMethod      pool.CreateOptsHealthCheckMethodOpt
+	HealthcheckPath            string
+	SuccessCodes               string
+	HealthcheckHttpVersion     pool.CreateOptsHealthCheckHttpVersionOpt
+	HealthcheckHttpDomainName  string
+	PoolAlgorithm              pool.CreateOptsAlgorithmOpt
+	HealthyThresholdCount      int
+	UnhealthyThresholdCount    int
+	HealthcheckTimeoutSeconds  int
+	HealthcheckIntervalSeconds int
+	HealthcheckPort            int
+	Tags                       map[string]string
+	TargetNodeLabels           map[string]string
+	IsAutoCreateSecurityGroup  bool
+	SecurityGroups             []string
+	EnableStickySession        bool
+	EnableTLSEncryption        bool
+}
+
+func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
+	opt := &IngressConfig{
+		LoadBalancerID:             "",
+		LoadBalancerName:           "",
+		LoadBalancerType:           loadbalancer.CreateOptsTypeOptLayer7,
+		PackageID:                  consts.DEFAULT_L7_PACKAGE_ID,
+		Scheme:                     loadbalancer.CreateOptsSchemeOptInternal,
+		IdleTimeoutClient:          50,
+		IdleTimeoutMember:          50,
+		IdleTimeoutConnection:      5,
+		InboundCIDRs:               "0.0.0.0/0",
+		HealthcheckProtocol:        pool.CreateOptsHealthCheckProtocolOptTCP,
+		HealthcheckHttpMethod:      pool.CreateOptsHealthCheckMethodOptGET,
+		HealthcheckPath:            "/",
+		SuccessCodes:               "200",
+		HealthcheckHttpVersion:     pool.CreateOptsHealthCheckHttpVersionOptHttp1,
+		HealthcheckHttpDomainName:  "",
+		PoolAlgorithm:              pool.CreateOptsAlgorithmOptRoundRobin,
+		HealthyThresholdCount:      3,
+		UnhealthyThresholdCount:    3,
+		HealthcheckTimeoutSeconds:  5,
+		HealthcheckIntervalSeconds: 30,
+		HealthcheckPort:            0,
+		Tags:                       map[string]string{},
+		TargetNodeLabels:           map[string]string{},
+		IsAutoCreateSecurityGroup:  true,
+		SecurityGroups:             []string{},
+		EnableStickySession:        false,
+		EnableTLSEncryption:        false,
 	}
-	if option, ok := ing.Annotations[ServiceAnnotationLoadBalancerName]; ok {
-		opt.Name = option
+	if pService == nil {
+		return opt
 	}
-	if option, ok := ing.Annotations[ServiceAnnotationPackageID]; ok {
+	if option, ok := pService.Annotations[ServiceAnnotationLoadBalancerName]; ok {
+		opt.LoadBalancerName = option
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationPackageID]; ok {
 		opt.PackageID = option
 	}
-	if option, ok := ing.Annotations[ServiceAnnotationScheme]; ok {
+	if option, ok := pService.Annotations[ServiceAnnotationScheme]; ok {
 		switch option {
 		case "internal":
 			opt.Scheme = loadbalancer.CreateOptsSchemeOptInternal
@@ -90,10 +145,144 @@ func CreateLoadbalancerOptions(ing *nwv1.Ingress) *loadbalancer.CreateOpts {
 			klog.Warningf("Invalid annotation \"%s\" value, must be \"internal\" or \"internet-facing\"", ServiceAnnotationScheme)
 		}
 	}
+
+	if option, ok := pService.Annotations[ServiceAnnotationIdleTimeoutClient]; ok {
+		opt.IdleTimeoutClient = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutClient, opt.IdleTimeoutClient)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationIdleTimeoutMember]; ok {
+		opt.IdleTimeoutMember = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutMember, opt.IdleTimeoutMember)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationIdleTimeoutConnection]; ok {
+		opt.IdleTimeoutConnection = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutConnection, opt.IdleTimeoutConnection)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationInboundCIDRs]; ok {
+		opt.InboundCIDRs = option
+	}
+
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckProtocol]; ok {
+		switch option {
+		case string(pool.CreateOptsHealthCheckProtocolOptTCP),
+			string(pool.CreateOptsHealthCheckProtocolOptHTTP),
+			string(pool.CreateOptsHealthCheckProtocolOptPINGUDP),
+			string(pool.CreateOptsHealthCheckProtocolOptHTTPs):
+			opt.HealthcheckProtocol = pool.CreateOptsHealthCheckProtocolOpt(option)
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s, %s, %s",
+				ServiceAnnotationHealthcheckProtocol,
+				pool.CreateOptsHealthCheckProtocolOptTCP,
+				pool.CreateOptsHealthCheckProtocolOptHTTP,
+				pool.CreateOptsHealthCheckProtocolOptHTTPs,
+				pool.CreateOptsHealthCheckProtocolOptPINGUDP)
+		}
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckHttpMethod]; ok {
+		switch option {
+		case string(pool.CreateOptsHealthCheckMethodOptGET),
+			string(pool.CreateOptsHealthCheckMethodOptPUT),
+			string(pool.CreateOptsHealthCheckMethodOptPOST):
+			opt.HealthcheckHttpMethod = pool.CreateOptsHealthCheckMethodOpt(option)
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s, %s", ServiceAnnotationHealthcheckHttpMethod,
+				pool.CreateOptsHealthCheckMethodOptGET,
+				pool.CreateOptsHealthCheckMethodOptPUT,
+				pool.CreateOptsHealthCheckMethodOptPOST)
+		}
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckPath]; ok {
+		opt.HealthcheckPath = option
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationSuccessCodes]; ok {
+		opt.SuccessCodes = option
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckHttpVersion]; ok {
+		switch option {
+		case string(pool.CreateOptsHealthCheckHttpVersionOptHttp1),
+			string(pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1):
+			opt.HealthcheckHttpVersion = pool.CreateOptsHealthCheckHttpVersionOpt(option)
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, muust be one of %s, %s", ServiceAnnotationHealthcheckHttpVersion,
+				pool.CreateOptsHealthCheckHttpVersionOptHttp1,
+				pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1)
+		}
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckHttpDomainName]; ok {
+		opt.HealthcheckHttpDomainName = option
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationPoolAlgorithm]; ok {
+		switch option {
+		case string(pool.CreateOptsAlgorithmOptRoundRobin),
+			string(pool.CreateOptsAlgorithmOptLeastConn),
+			string(pool.CreateOptsAlgorithmOptSourceIP):
+			opt.PoolAlgorithm = pool.CreateOptsAlgorithmOpt(option)
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s, %s", ServiceAnnotationPoolAlgorithm,
+				pool.CreateOptsAlgorithmOptRoundRobin,
+				pool.CreateOptsAlgorithmOptLeastConn,
+				pool.CreateOptsAlgorithmOptSourceIP)
+		}
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthyThresholdCount]; ok {
+		opt.HealthyThresholdCount = utils.ParseIntAnnotation(option, ServiceAnnotationHealthyThresholdCount, opt.HealthyThresholdCount)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationUnhealthyThresholdCount]; ok {
+		opt.UnhealthyThresholdCount = utils.ParseIntAnnotation(option, ServiceAnnotationUnhealthyThresholdCount, opt.UnhealthyThresholdCount)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckTimeoutSeconds]; ok {
+		opt.HealthcheckTimeoutSeconds = utils.ParseIntAnnotation(option, ServiceAnnotationHealthcheckTimeoutSeconds, opt.HealthcheckTimeoutSeconds)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckIntervalSeconds]; ok {
+		opt.HealthcheckIntervalSeconds = utils.ParseIntAnnotation(option, ServiceAnnotationHealthcheckIntervalSeconds, opt.HealthcheckIntervalSeconds)
+	}
+
+	if lbID, ok := pService.Annotations[ServiceAnnotationLoadBalancerID]; ok {
+		opt.LoadBalancerID = lbID
+	}
+	if tags, ok := pService.Annotations[ServiceAnnotationTags]; ok {
+		opt.Tags = utils.ParseStringMapAnnotation(tags, ServiceAnnotationTags)
+	}
+	if tnl, ok := pService.Annotations[ServiceAnnotationTargetNodeLabels]; ok {
+		opt.TargetNodeLabels = utils.ParseStringMapAnnotation(tnl, ServiceAnnotationTargetNodeLabels)
+	}
+	if sgs, ok := pService.Annotations[ServiceAnnotationSecurityGroups]; ok {
+		opt.IsAutoCreateSecurityGroup = false
+		opt.SecurityGroups = utils.ParseStringListAnnotation(sgs, ServiceAnnotationSecurityGroups)
+	}
+	if port, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ok {
+		opt.HealthcheckPort = utils.ParseIntAnnotation(port, ServiceAnnotationHealthcheckPort, opt.HealthcheckPort)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationEnableStickySession]; ok {
+		switch option {
+		case "true", "false":
+			boolValue, _ := strconv.ParseBool(option)
+			opt.EnableStickySession = boolValue
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableStickySession)
+		}
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationEnableTLSEncryption]; ok {
+		switch option {
+		case "true", "false":
+			boolValue, _ := strconv.ParseBool(option)
+			opt.EnableTLSEncryption = boolValue
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableTLSEncryption)
+		}
+	}
 	return opt
 }
 
-func CreateListenerOptions(ing *nwv1.Ingress, isHTTPS bool) *listener.CreateOpts {
+func (s *IngressConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
+	opt := &loadbalancer.CreateOpts{
+		Name:      s.LoadBalancerName,
+		PackageID: s.PackageID,
+		Scheme:    s.Scheme,
+		SubnetID:  "",
+		Type:      s.LoadBalancerType,
+	}
+	return opt
+}
+
+func (s *IngressConfig) CreateListenerOptions(isHTTPS bool) *listener.CreateOpts {
 	opt := &listener.CreateOpts{
 		ListenerName:                consts.DEFAULT_HTTP_LISTENER_NAME,
 		ListenerProtocol:            listener.CreateOptsListenerProtocolOptHTTP,
@@ -102,153 +291,49 @@ func CreateListenerOptions(ing *nwv1.Ingress, isHTTPS bool) *listener.CreateOpts
 		ClientCertificate:           nil,
 		DefaultCertificateAuthority: nil,
 		DefaultPoolId:               "",
-		TimeoutClient:               50,
-		TimeoutMember:               50,
-		TimeoutConnection:           5,
-		AllowedCidrs:                "0.0.0.0/0",
+		TimeoutClient:               s.IdleTimeoutClient,
+		TimeoutMember:               s.IdleTimeoutMember,
+		TimeoutConnection:           s.IdleTimeoutConnection,
+		AllowedCidrs:                s.InboundCIDRs,
 	}
 	if isHTTPS {
 		opt.ListenerName = consts.DEFAULT_HTTPS_LISTENER_NAME
 		opt.ListenerProtocol = listener.CreateOptsListenerProtocolOptHTTPS
 		opt.ListenerProtocolPort = 443
-
-	}
-	if ing == nil {
-		return opt
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationIdleTimeoutClient]; ok {
-		opt.TimeoutClient = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutClient, opt.TimeoutClient)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationIdleTimeoutMember]; ok {
-		opt.TimeoutMember = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutMember, opt.TimeoutMember)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationIdleTimeoutConnection]; ok {
-		opt.TimeoutConnection = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutConnection, opt.TimeoutConnection)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationInboundCIDRs]; ok {
-		opt.AllowedCidrs = option
 	}
 	return opt
 }
 
-func CreatePoolOptions(ing *nwv1.Ingress) *pool.CreateOpts {
+func (s *IngressConfig) CreatePoolOptions() *pool.CreateOpts {
+	healthMonitor := pool.HealthMonitor{
+		HealthyThreshold:    s.HealthyThresholdCount,
+		UnhealthyThreshold:  s.UnhealthyThresholdCount,
+		Interval:            s.HealthcheckIntervalSeconds,
+		Timeout:             s.HealthcheckTimeoutSeconds,
+		HealthCheckProtocol: s.HealthcheckProtocol,
+	}
+	if s.HealthcheckProtocol == pool.CreateOptsHealthCheckProtocolOptHTTP {
+		healthMonitor = pool.HealthMonitor{
+			HealthyThreshold:    s.HealthyThresholdCount,
+			UnhealthyThreshold:  s.UnhealthyThresholdCount,
+			Interval:            s.HealthcheckIntervalSeconds,
+			Timeout:             s.HealthcheckTimeoutSeconds,
+			HealthCheckProtocol: s.HealthcheckProtocol,
+			HealthCheckMethod:   PointerOf(s.HealthcheckHttpMethod),
+			HealthCheckPath:     PointerOf(s.HealthcheckPath),
+			SuccessCode:         PointerOf(s.SuccessCodes),
+			HttpVersion:         PointerOf(s.HealthcheckHttpVersion),
+			DomainName:          PointerOf(s.HealthcheckHttpDomainName),
+		}
+	}
 	opt := &pool.CreateOpts{
 		PoolName:      "",
 		PoolProtocol:  pool.CreateOptsProtocolOptHTTP,
-		Stickiness:    PointerOf[bool](false),
-		TLSEncryption: PointerOf[bool](false),
-		HealthMonitor: pool.HealthMonitor{
-			HealthyThreshold:    3,
-			UnhealthyThreshold:  3,
-			Interval:            30,
-			Timeout:             5,
-			HealthCheckProtocol: pool.CreateOptsHealthCheckProtocolOptTCP,
-		},
-		Algorithm: pool.CreateOptsAlgorithmOptRoundRobin,
-		Members:   []*pool.Member{},
-	}
-	if ing == nil {
-		return opt
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationHealthcheckProtocol]; ok {
-		switch option {
-		case string(pool.CreateOptsHealthCheckProtocolOptTCP), string(pool.CreateOptsHealthCheckProtocolOptHTTP):
-			opt.HealthMonitor.HealthCheckProtocol = pool.CreateOptsHealthCheckProtocolOpt(option)
-			if option == string(pool.CreateOptsHealthCheckProtocolOptHTTP) {
-				opt.HealthMonitor = pool.HealthMonitor{
-					HealthyThreshold:    3,
-					UnhealthyThreshold:  3,
-					Interval:            30,
-					Timeout:             5,
-					HealthCheckProtocol: pool.CreateOptsHealthCheckProtocolOptHTTP,
-					HealthCheckMethod:   PointerOf(pool.CreateOptsHealthCheckMethodOptGET),
-					HealthCheckPath:     PointerOf("/"),
-					SuccessCode:         PointerOf("200"),
-					HttpVersion:         PointerOf(pool.CreateOptsHealthCheckHttpVersionOptHttp1),
-					DomainName:          PointerOf(""),
-				}
-				if option, ok := ing.Annotations[ServiceAnnotationHealthcheckHttpMethod]; ok {
-					switch option {
-					case string(pool.CreateOptsHealthCheckMethodOptGET),
-						string(pool.CreateOptsHealthCheckMethodOptPUT),
-						string(pool.CreateOptsHealthCheckMethodOptPOST):
-						opt.HealthMonitor.HealthCheckMethod = PointerOf(pool.CreateOptsHealthCheckMethodOpt(option))
-					default:
-						klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s, %s", ServiceAnnotationHealthcheckHttpMethod,
-							pool.CreateOptsHealthCheckMethodOptGET,
-							pool.CreateOptsHealthCheckMethodOptPUT,
-							pool.CreateOptsHealthCheckMethodOptPOST)
-					}
-				}
-				if option, ok := ing.Annotations[ServiceAnnotationHealthcheckPath]; ok {
-					opt.HealthMonitor.HealthCheckPath = PointerOf(option)
-				}
-				if option, ok := ing.Annotations[ServiceAnnotationSuccessCodes]; ok {
-					opt.HealthMonitor.SuccessCode = PointerOf(option)
-				}
-				if option, ok := ing.Annotations[ServiceAnnotationHealthcheckHttpVersion]; ok {
-					switch option {
-					case string(pool.CreateOptsHealthCheckHttpVersionOptHttp1),
-						string(pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1):
-						opt.HealthMonitor.HttpVersion = PointerOf(pool.CreateOptsHealthCheckHttpVersionOpt(option))
-					default:
-						klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s", ServiceAnnotationHealthcheckHttpVersion,
-							pool.CreateOptsHealthCheckHttpVersionOptHttp1,
-							pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1)
-					}
-				}
-				if option, ok := ing.Annotations[ServiceAnnotationHealthcheckHttpDomainName]; ok {
-					opt.HealthMonitor.DomainName = PointerOf(option)
-				}
-			}
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s", ServiceAnnotationHealthcheckProtocol,
-				pool.CreateOptsHealthCheckProtocolOptTCP,
-				pool.CreateOptsHealthCheckProtocolOptHTTP)
-		}
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationPoolAlgorithm]; ok {
-		switch option {
-		case string(pool.CreateOptsAlgorithmOptRoundRobin),
-			string(pool.CreateOptsAlgorithmOptLeastConn),
-			string(pool.CreateOptsAlgorithmOptSourceIP):
-			opt.Algorithm = pool.CreateOptsAlgorithmOpt(option)
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s, %s", ServiceAnnotationPoolAlgorithm,
-				pool.CreateOptsAlgorithmOptRoundRobin,
-				pool.CreateOptsAlgorithmOptLeastConn,
-				pool.CreateOptsAlgorithmOptSourceIP)
-		}
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationHealthyThresholdCount]; ok {
-		opt.HealthMonitor.HealthyThreshold = utils.ParseIntAnnotation(option, ServiceAnnotationHealthyThresholdCount, opt.HealthMonitor.HealthyThreshold)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationUnhealthyThresholdCount]; ok {
-		opt.HealthMonitor.UnhealthyThreshold = utils.ParseIntAnnotation(option, ServiceAnnotationUnhealthyThresholdCount, opt.HealthMonitor.UnhealthyThreshold)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationHealthcheckTimeoutSeconds]; ok {
-		opt.HealthMonitor.Timeout = utils.ParseIntAnnotation(option, ServiceAnnotationHealthcheckTimeoutSeconds, opt.HealthMonitor.Timeout)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationHealthcheckIntervalSeconds]; ok {
-		opt.HealthMonitor.Interval = utils.ParseIntAnnotation(option, ServiceAnnotationHealthcheckIntervalSeconds, opt.HealthMonitor.Interval)
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationEnableStickySession]; ok {
-		switch option {
-		case "true", "false":
-			boolValue, _ := strconv.ParseBool(option)
-			opt.Stickiness = PointerOf(boolValue)
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableStickySession)
-		}
-	}
-	if option, ok := ing.Annotations[ServiceAnnotationEnableTLSEncryption]; ok {
-		switch option {
-		case "true", "false":
-			boolValue, _ := strconv.ParseBool(option)
-			opt.TLSEncryption = PointerOf(boolValue)
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableTLSEncryption)
-		}
+		Stickiness:    nil,
+		TLSEncryption: nil,
+		HealthMonitor: healthMonitor,
+		Algorithm:     s.PoolAlgorithm,
+		Members:       []*pool.Member{},
 	}
 	return opt
 }

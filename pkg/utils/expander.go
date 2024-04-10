@@ -49,14 +49,11 @@ type SecGroupRuleExpander struct {
 }
 
 type IngressInspect struct {
-	DefaultPool               *PoolExpander
-	Name                      string
-	Namespace                 string
-	LbID                      string                   // store the lb id
-	LbName                    string                   // auto generate or pass by user through annotation
-	LbOptions                 *loadbalancer.CreateOpts // create options for lb
-	IsAutoCreateSecurityGroup bool
-	AllowCIDR                 string
+	DefaultPool *PoolExpander
+	Name        string
+	Namespace   string
+	LbOptions   *loadbalancer.CreateOpts // create options for lb
+	AllowCIDR   string
 
 	PolicyExpander       []*PolicyExpander
 	PoolExpander         []*PoolExpander
@@ -64,7 +61,6 @@ type IngressInspect struct {
 	CertificateExpander  []*CertificateExpander
 	SecurityGroups       []string
 	InstanceIDs          []string
-	Tags                 map[string]string
 	SecGroupRuleExpander []*SecGroupRuleExpander
 }
 

@@ -2,6 +2,7 @@ package vngcloud
 
 import (
 	"fmt"
+	"strings"
 
 	vErrors "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/errors"
 	lObjects "github.com/vngcloud/vngcloud-go-sdk/vngcloud/objects"
@@ -9,6 +10,7 @@ import (
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/metadata"
 	client2 "github.com/vngcloud/vngcloud-go-sdk/client"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	lPortal "github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/portal/v1"
 	"k8s.io/klog/v2"
 )
@@ -96,4 +98,16 @@ func GetNetworkID(pserver []*lObjects.Server, pSubnetID string) string {
 		}
 	}
 	return ""
+}
+
+func HealthcheckProtocoToSecGroupProtocol(p string) secgroup_rule.CreateOptsProtocolOpt {
+	protocol := strings.ToLower(p)
+	switch protocol {
+	case "tcp":
+		return secgroup_rule.CreateOptsProtocolOptTCP
+	case "udp":
+		return secgroup_rule.CreateOptsProtocolOptUDP
+	default:
+		return secgroup_rule.CreateOptsProtocolOptTCP
+	}
 }

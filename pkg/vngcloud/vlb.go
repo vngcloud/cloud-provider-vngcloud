@@ -31,6 +31,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
+type Expander struct {
+	serviceConf *ServiceConfig
+	*utils.IngressInspect
+}
 type (
 	// VLbOpts is default vLB configurations that are loaded from the vcontainer-ccm config file
 	VLbOpts struct {
@@ -186,11 +190,7 @@ func (s *vLB) ensureLoadBalancer(
 		return nil, err
 	}
 
-	lbID, _ := s.GetLoadbalancerIDByService(pService)
-	if lbID != "" {
-		newIngExpander.LbID = lbID
-	}
-	lbID, err = s.ensureLoadBalancerInstance(newIngExpander)
+	lbID, err := s.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
@@ -366,18 +366,19 @@ func (s *vLB) getClusterID() string {
 	return s.config.Cluster.ClusterID
 }
 
-func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, error) {
+func (s *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 	if pService == nil {
-		return &utils.IngressInspect{
-			DefaultPool:         nil,
-			PolicyExpander:      make([]*utils.PolicyExpander, 0),
-			PoolExpander:        make([]*utils.PoolExpander, 0),
-			ListenerExpander:    make([]*utils.ListenerExpander, 0),
-			CertificateExpander: make([]*utils.CertificateExpander, 0),
-			SecurityGroups:      make([]string, 0),
-
-			IsAutoCreateSecurityGroup: false,
-			SecGroupRuleExpander:      make([]*utils.SecGroupRuleExpander, 0),
+		return &Expander{
+			serviceConf: NewServiceConfig(nil),
+			IngressInspect: &utils.IngressInspect{
+				DefaultPool:          nil,
+				PolicyExpander:       make([]*utils.PolicyExpander, 0),
+				PoolExpander:         make([]*utils.PoolExpander, 0),
+				ListenerExpander:     make([]*utils.ListenerExpander, 0),
+				CertificateExpander:  make([]*utils.CertificateExpander, 0),
+				SecurityGroups:       make([]string, 0),
+				SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
+			},
 		}, nil
 	}
 
@@ -391,64 +392,27 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		return nil, vErrors.NewErrServicePortEmpty()
 	}
 
+	serviceConf := NewServiceConfig(pService)
+
 	ingressInspect := &utils.IngressInspect{
-		Name:                pService.Name,
-		Namespace:           pService.Namespace,
-		DefaultPool:         nil,
-		LbID:                "",
-		LbName:              "",
-		LbOptions:           CreateLoadbalancerOptions(pService),
-		PolicyExpander:      make([]*utils.PolicyExpander, 0),
-		PoolExpander:        make([]*utils.PoolExpander, 0),
-		ListenerExpander:    make([]*utils.ListenerExpander, 0),
-		CertificateExpander: make([]*utils.CertificateExpander, 0),
-		SecurityGroups:      make([]string, 0),
-		InstanceIDs:         make([]string, 0),
-
-		IsAutoCreateSecurityGroup: true,
-		SecGroupRuleExpander:      make([]*utils.SecGroupRuleExpander, 0),
+		Name:                 pService.Name,
+		Namespace:            pService.Namespace,
+		DefaultPool:          nil,
+		LbOptions:            serviceConf.CreateLoadbalancerOptions(),
+		PolicyExpander:       make([]*utils.PolicyExpander, 0),
+		PoolExpander:         make([]*utils.PoolExpander, 0),
+		ListenerExpander:     make([]*utils.ListenerExpander, 0),
+		CertificateExpander:  make([]*utils.CertificateExpander, 0),
+		SecurityGroups:       make([]string, 0),
+		InstanceIDs:          make([]string, 0),
+		SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
+	}
+	if ingressInspect.LbOptions.Name == "" {
+		serviceConf.LoadBalancerName = utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+		ingressInspect.LbOptions.Name = serviceConf.LoadBalancerName
 	}
 
-	// check in annotation
-	nodeLabels := make(map[string]string)
-	if tnl, ok := pService.Annotations[ServiceAnnotationTargetNodeLabels]; ok {
-		nodeLabels = utils.ParseStringMapAnnotation(tnl, ServiceAnnotationTags)
-	}
-	if sgs, ok := pService.Annotations[ServiceAnnotationSecurityGroups]; ok {
-		ingressInspect.IsAutoCreateSecurityGroup = false
-		ingressInspect.SecurityGroups = utils.ParseStringListAnnotation(sgs, ServiceAnnotationSecurityGroups)
-	}
-	if tags, ok := pService.Annotations[ServiceAnnotationTags]; ok {
-		ingressInspect.Tags = utils.ParseStringMapAnnotation(tags, ServiceAnnotationTags)
-	}
-	if lbID, ok := pService.Annotations[ServiceAnnotationLoadBalancerID]; ok {
-		ingressInspect.LbID = lbID
-	}
-	if lbName, ok := pService.Annotations[ServiceAnnotationLoadBalancerName]; ok {
-		ingressInspect.LbName = lbName
-	} else {
-		ingressInspect.LbName = utils.GenerateLBName(s.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
-	}
-	if port, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ingressInspect.IsAutoCreateSecurityGroup && ok {
-		mPort := utils.ParseIntAnnotation(port, ServiceAnnotationHealthcheckPort, 0)
-		if mPort > 0 {
-			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
-				CreateOpts: secgroup_rule.CreateOpts{
-					Description:     "monitor port",
-					Direction:       secgroup_rule.CreateOptsDirectionOptIngress,
-					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
-					PortRangeMax:    int(mPort),
-					PortRangeMin:    int(mPort),
-					Protocol:        secgroup_rule.CreateOptsProtocolOptTCP, // ............................ from annotation healthcheck protocol
-					RemoteIPPrefix:  "",                                     // subnet mask
-					SecurityGroupID: "",                                     // will be set later
-				},
-			})
-		}
-	}
-	ingressInspect.LbOptions.Name = ingressInspect.LbName
-
-	nodeObjs, err := utils.ListNodeWithPredicate(s.nodeLister, nodeLabels)
+	nodeObjs, err := utils.ListNodeWithPredicate(s.nodeLister, serviceConf.TargetNodeLabels)
 	if len(nodeObjs) < 1 {
 		logrus.Errorf("No nodes found in the cluster")
 		return nil, vErrors.ErrNoNodeAvailable
@@ -501,8 +465,8 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 		poolName := utils.GenListenerAndPoolName(s.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
 
 		monitorPort := int(port.NodePort)
-		if p, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ok {
-			monitorPort = utils.ParseIntAnnotation(p, ServiceAnnotationHealthcheckPort, int(port.NodePort))
+		if serviceConf.HealthcheckPort != 0 {
+			monitorPort = serviceConf.HealthcheckPort
 		}
 
 		members := make([]*pool.Member, 0)
@@ -516,11 +480,11 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 				MonitorPort: monitorPort,
 			})
 		}
-		poolOptions := CreatePoolOptions(pService)
+		poolOptions := serviceConf.CreatePoolOptions(port)
 		poolOptions.PoolName = poolName
 		poolOptions.Members = members
 
-		if ingressInspect.IsAutoCreateSecurityGroup {
+		if serviceConf.IsAutoCreateSecurityGroup {
 			ingressInspect.SecGroupRuleExpander = append(ingressInspect.SecGroupRuleExpander, &utils.SecGroupRuleExpander{
 				CreateOpts: secgroup_rule.CreateOpts{
 					Description:     fmt.Sprintf("%s-%s-%d", pService.ObjectMeta.Namespace, pService.Name, int(port.Port)),
@@ -528,14 +492,14 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 					EtherType:       secgroup_rule.CreateOptsEtherTypeOptIPv4,
 					PortRangeMax:    int(port.NodePort),
 					PortRangeMin:    int(port.NodePort),
-					Protocol:        secgroup_rule.CreateOptsProtocolOptTCP,
+					Protocol:        vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)),
 					RemoteIPPrefix:  "", // subnet mask
 					SecurityGroupID: "", // will be set later
 				},
 			})
 		}
 
-		listenerOptions := CreateListenerOptions(pService, port)
+		listenerOptions := serviceConf.CreateListenerOptions(port)
 		listenerOptions.ListenerName = poolName
 
 		ingressInspect.PoolExpander = append(ingressInspect.PoolExpander, &utils.PoolExpander{
@@ -547,45 +511,48 @@ func (s *vLB) inspectService(pService *lCoreV1.Service) (*utils.IngressInspect, 
 			CreateOpts:      *listenerOptions,
 		})
 	}
-	return ingressInspect, nil
+	return &Expander{
+		serviceConf:    serviceConf,
+		IngressInspect: ingressInspect,
+	}, nil
 }
 
-func (s *vLB) ensureLoadBalancerInstance(inspect *utils.IngressInspect) (string, error) {
-	if inspect.LbID == "" {
+func (s *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
+	if inspect.serviceConf.LoadBalancerID == "" {
 		lb, err := vngcloudutil.CreateLB(s.vLBSC, s.getProjectID(), inspect.LbOptions)
 		if err != nil {
 			klog.Errorf("error when create new lb: %v", err)
 			return "", err
 		}
-		inspect.LbID = lb.UUID
-		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.LbID)
+		inspect.serviceConf.LoadBalancerID = lb.UUID
+		vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
 
-	lb, err := vngcloudutil.GetLB(s.vLBSC, s.getProjectID(), inspect.LbID)
+	lb, err := vngcloudutil.GetLB(s.vLBSC, s.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	if err != nil {
 		klog.Errorf("error when get lb: %v", err)
-		return inspect.LbID, err
+		return inspect.serviceConf.LoadBalancerID, err
 	}
 
 	checkDetailLB := func() {
-		if lb.Name != inspect.LbName {
-			klog.Warningf("Load balancer name (%s) not match (%s)", lb.Name, inspect.LbName)
+		if lb.Name != inspect.serviceConf.LoadBalancerName {
+			klog.Warningf("Load balancer name (%s) not match (%s)", lb.Name, inspect.serviceConf.LoadBalancerName)
 		}
 		if lb.PackageID != inspect.LbOptions.PackageID {
 			klog.Info("Resize load-balancer package to: ", inspect.LbOptions.PackageID)
-			err := vngcloudutil.ResizeLB(s.vLBSC, s.getProjectID(), inspect.LbID, inspect.LbOptions.PackageID)
+			err := vngcloudutil.ResizeLB(s.vLBSC, s.getProjectID(), inspect.serviceConf.LoadBalancerID, inspect.LbOptions.PackageID)
 			if err != nil {
 				klog.Errorf("error when resize lb: %v", err)
 				return
 			}
-			vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.LbID)
+			vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), inspect.serviceConf.LoadBalancerID)
 		}
 		if lb.Internal != (inspect.LbOptions.Scheme == loadbalancer.CreateOptsSchemeOptInternal) {
 			klog.Warning("Load balancer scheme not match, must delete and recreate")
 		}
 	}
 	checkDetailLB()
-	return inspect.LbID, nil
+	return inspect.serviceConf.LoadBalancerID, nil
 }
 
 func (s *vLB) GetLoadbalancerIDByService(pService *lCoreV1.Service) (string, error) {
@@ -630,7 +597,7 @@ func (s *vLB) GetLoadbalancerIDByService(pService *lCoreV1.Service) (string, err
 	return "", vErrors.ErrNotFound
 }
 
-func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *utils.IngressInspect) (*lObjects.LoadBalancer, error) {
+func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *Expander) (*lObjects.LoadBalancer, error) {
 	lb, err := vngcloudutil.WaitForLBActive(s.vLBSC, s.getProjectID(), lbID)
 	if err != nil {
 		klog.Errorln("error when wait for lb active", err)
@@ -675,7 +642,7 @@ func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}
-	err = s.ensureTags(lbID, newIngExpander.Tags)
+	err = s.ensureTags(lbID, newIngExpander.serviceConf.Tags)
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}
@@ -849,7 +816,7 @@ func (s *vLB) deleteListener(lbID, listenerName string) (*lObjects.Listener, err
 	return ilistener, nil
 }
 
-func (s *vLB) ensureSecurityGroups(oldInspect, inspect *utils.IngressInspect) error {
+func (s *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 	var listSecgroups []*lObjects.Secgroup
 	listSecgroups, err := vngcloudutil.ListSecurityGroups(s.vServerSC, s.getProjectID())
 	if err != nil {
@@ -864,7 +831,7 @@ func (s *vLB) ensureSecurityGroups(oldInspect, inspect *utils.IngressInspect) er
 		}
 	}
 
-	if inspect.IsAutoCreateSecurityGroup {
+	if inspect.serviceConf.IsAutoCreateSecurityGroup {
 		if defaultSecgroup == nil {
 			defaultSecgroup, err = vngcloudutil.CreateSecurityGroup(s.vServerSC, s.getProjectID(), defaultSecgroupName, "Automatically created using VNGCLOUD Controller Manager")
 			if err != nil {
@@ -913,7 +880,7 @@ func (s *vLB) ensureSecurityGroups(oldInspect, inspect *utils.IngressInspect) er
 	}
 
 	// add default security group to old inspect
-	if oldInspect != nil && oldInspect.IsAutoCreateSecurityGroup && defaultSecgroup != nil {
+	if oldInspect != nil && oldInspect.serviceConf.IsAutoCreateSecurityGroup && defaultSecgroup != nil {
 		oldInspect.SecurityGroups = append(oldInspect.SecurityGroups, defaultSecgroup.UUID)
 	}
 
