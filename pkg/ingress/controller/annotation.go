@@ -102,7 +102,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		LoadBalancerName:           "",
 		LoadBalancerType:           loadbalancer.CreateOptsTypeOptLayer7,
 		PackageID:                  consts.DEFAULT_L7_PACKAGE_ID,
-		Scheme:                     loadbalancer.CreateOptsSchemeOptInternal,
+		Scheme:                     loadbalancer.CreateOptsSchemeOptInternet,
 		IdleTimeoutClient:          50,
 		IdleTimeoutMember:          50,
 		IdleTimeoutConnection:      5,

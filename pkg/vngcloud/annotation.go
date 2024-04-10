@@ -99,7 +99,7 @@ func NewServiceConfig(pService *lCoreV1.Service) *ServiceConfig {
 		LoadBalancerName:           "",
 		LoadBalancerType:           loadbalancer.CreateOptsTypeOptLayer4,
 		PackageID:                  consts.DEFAULT_L4_PACKAGE_ID,
-		Scheme:                     loadbalancer.CreateOptsSchemeOptInternal,
+		Scheme:                     loadbalancer.CreateOptsSchemeOptInternet,
 		IdleTimeoutClient:          50,
 		IdleTimeoutMember:          50,
 		IdleTimeoutConnection:      5,
