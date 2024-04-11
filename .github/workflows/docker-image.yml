@@ -5,7 +5,7 @@ on:
     branches: [ "main", "dev" ]
 
 env:
-  REGISTRY: ghcr.io/vngcloud
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-push-image:
@@ -35,7 +35,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/vngcloud/${{ matrix.image }}
           tags: latest
 
       - name: Build and push Docker image
