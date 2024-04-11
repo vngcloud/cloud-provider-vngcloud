@@ -87,7 +87,7 @@ type Controller struct {
 	vServerSC *vconSdkClient.ServiceClient
 	extraInfo *vngcloudutil.ExtraInfo
 
-	isUpdateDefaultPool bool // it have a bug when update default pool member, set this to reapply when update pool member
+	isReApplyNextTime bool // it have a bug when update default pool member, set this to reapply when update pool member
 	trackLBUpdate       *utils.UpdateTracker
 	mu                  sync.Mutex
 	numOfUpdatingThread int
@@ -341,8 +341,8 @@ func (c *Controller) nodeSyncLoop() {
 		isReApply = true
 		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
 	}
-	if c.isUpdateDefaultPool {
-		c.isUpdateDefaultPool = false
+	if c.isReApplyNextTime {
+		c.isReApplyNextTime = false
 		isReApply = true
 	}
 
@@ -469,10 +469,7 @@ func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 	}
 	c.trackLBUpdate.AddUpdateTracker(lb.UUID, fmt.Sprintf("%s/%s", ing.Namespace, ing.Name), lb.UpdatedAt)
 	_, err = c.updateIngressStatus(ing, lb)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBalancer) (*nwv1.Ingress, error) {
@@ -1157,7 +1154,6 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 
 	// delete redundant policy and pool if in oldIng
 	// with id from curLBExpander
-	klog.Infof("*************** DELETE REDUNDANT POLICY AND POOL *****************")
 	policyWillUse := make(map[string]int)
 	for policyIndex, pol := range newIngExpander.PolicyExpander {
 		policyWillUse[pol.Name] = policyIndex
@@ -1267,7 +1263,7 @@ func (c *Controller) ensureDefaultPoolMember(lbID, poolID string, oldMembers, ne
 		return nil, err
 	}
 	if updateMember != nil {
-		c.isUpdateDefaultPool = true
+		c.isReApplyNextTime = true
 		err = vngcloudutil.UpdatePoolMember(c.vLBSC, c.getProjectID(), lbID, poolID, updateMember)
 		if err != nil {
 			klog.Errorln("error when update pool members", err)

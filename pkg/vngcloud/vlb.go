@@ -214,7 +214,7 @@ func (s *vLB) ensureLoadBalancer(
 	s.serviceCache[serviceKey] = pService.DeepCopy()
 
 	klog.Infof(
-		"--- DONE--- Load balancer %s for service %s/%s is ready to use for Kubernetes controller",
+		"Load balancer %s for service %s/%s is ready to use for Kubernetes controller\n----- DONE ----- ",
 		lb.Name, pService.Namespace, pService.Name)
 	return lbStatus, nil
 }
@@ -647,7 +647,6 @@ func (s *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 
 	// delete redundant policy and pool if in oldIng
 	// with id from curLBExpander
-	klog.Infof("*************** DELETE REDUNDANT POLICY AND POOL *****************")
 	listenerWillUse := make(map[string]int)
 	for lIndex, lis := range newIngExpander.ListenerExpander {
 		listenerWillUse[lis.ListenerName] = lIndex
