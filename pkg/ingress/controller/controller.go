@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -1317,6 +1318,12 @@ func (c *Controller) ensureListener(lbID, lisName string, listenerOpts listener.
 			klog.Errorln("error when find listener", err)
 			return nil, err
 		}
+	}
+
+	// check if listerner is right protocol
+	if !strings.EqualFold(lis.Protocol, string(listenerOpts.ListenerProtocol)) {
+		klog.Errorf("listener protocol not match: %s, %s", lis.Protocol, listenerOpts.ListenerProtocol)
+		return nil, vErrors.ErrListenerProtocolNotMatch
 	}
 
 	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)

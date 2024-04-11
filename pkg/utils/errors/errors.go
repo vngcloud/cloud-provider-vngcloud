@@ -168,6 +168,7 @@ var (
 	ErrSecurityGroupNotFound              = vErr.New("failed to find security group")
 	ErrNetworkIDNotFound                  = vErr.New("failed to find network ID")
 	ErrNoCertificateFound                 = vErr.New("no certificate found")
+	ErrListenerProtocolNotMatch           = vErr.New("listener protocol does not match")
 )
 
 var ErrLoadBalancerIDNotFoundAnnotation = vErr.New("failed to find LoadBalancerID from Annotation")

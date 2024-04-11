@@ -66,10 +66,6 @@ func FindListenerByPort(client *client.ServiceClient, projectID string, lbID str
 	}
 	for _, listener := range listeners {
 		if listener.ProtocolPort == port {
-			// if (port == 443 && listener.Protocol != "HTTPS") || (port == 80 && listener.Protocol != "HTTP") {
-			// 	klog.Infof("listener %s has wrong protocol %s or wrong port %d", listener.UUID, listener.Protocol, listener.ProtocolPort)
-			// 	return nil, fmt.Errorf("listener %s has wrong protocol %s or wrong port %d", listener.UUID, listener.Protocol, listener.ProtocolPort)
-			// } ......................................
 			return listener, nil
 		}
 	}
