@@ -46,17 +46,6 @@ func GeneratePoolName(clusterID, namespace, resourceName, resourceType, serviceN
 	return validateName(name)
 }
 
-func GenerateCertificateName(namespace, name string) string {
-	fullName := fmt.Sprintf("%s-%s", namespace, name)
-	hashName := HashString(fullName)
-	newName := fmt.Sprintf("%s-%s-%s-%s-",
-		consts.DEFAULT_LB_PREFIX_NAME,
-		TrimString(namespace, 10),
-		TrimString(name, 10),
-		TrimString(hashName, consts.DEFAULT_HASH_NAME_LENGTH))
-	return validateName(newName)
-}
-
 func validateName(newName string) string {
 	for _, char := range newName {
 		if !unicode.IsLetter(char) && !unicode.IsDigit(char) && char != '-' && char != '.' {

@@ -58,7 +58,6 @@ type IngressInspect struct {
 	PolicyExpander       []*PolicyExpander
 	PoolExpander         []*PoolExpander
 	ListenerExpander     []*ListenerExpander
-	CertificateExpander  []*CertificateExpander
 	SecurityGroups       []string
 	InstanceIDs          []string
 	SecGroupRuleExpander []*SecGroupRuleExpander

@@ -34,6 +34,7 @@ const (
 	ServiceAnnotationSecurityGroups   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/security-groups"
 	ServiceAnnotationTags             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/tags"
 	ServiceAnnotationScheme           = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/scheme"
+	ServiceAnnotationCertificateIDs   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/certificate-ids"
 
 	// Listener annotations
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
@@ -94,6 +95,7 @@ type IngressConfig struct {
 	SecurityGroups             []string
 	EnableStickySession        bool
 	EnableTLSEncryption        bool
+	CertificateIDs             []string
 }
 
 func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
@@ -125,6 +127,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		SecurityGroups:             []string{},
 		EnableStickySession:        false,
 		EnableTLSEncryption:        false,
+		CertificateIDs:             []string{},
 	}
 	if pService == nil {
 		return opt
@@ -268,6 +271,9 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableTLSEncryption)
 		}
 	}
+	if option, ok := pService.Annotations[ServiceAnnotationCertificateIDs]; ok {
+		opt.CertificateIDs = utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
+	}
 	return opt
 }
 
@@ -329,8 +335,8 @@ func (s *IngressConfig) CreatePoolOptions() *pool.CreateOpts {
 	opt := &pool.CreateOpts{
 		PoolName:      "",
 		PoolProtocol:  pool.CreateOptsProtocolOptHTTP,
-		Stickiness:    nil,
-		TLSEncryption: nil,
+		Stickiness:    PointerOf(s.EnableStickySession),
+		TLSEncryption: PointerOf(s.EnableStickySession),
 		HealthMonitor: healthMonitor,
 		Algorithm:     s.PoolAlgorithm,
 		Members:       []*pool.Member{},

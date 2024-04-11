@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +20,6 @@ import (
 	vconSdkClient "github.com/vngcloud/vngcloud-go-sdk/client"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud"
 	lObjects "github.com/vngcloud/vngcloud-go-sdk/vngcloud/objects"
-	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/certificates"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/policy"
@@ -88,7 +86,6 @@ type Controller struct {
 	vServerSC *vconSdkClient.ServiceClient
 	extraInfo *vngcloudutil.ExtraInfo
 
-	SecretTrackers      *SecretTracker
 	isUpdateDefaultPool bool // it have a bug when update default pool member, set this to reapply when update pool member
 	trackLBUpdate       *utils.UpdateTracker
 	mu                  sync.Mutex
@@ -124,9 +121,8 @@ func NewController(conf config.Config) *Controller {
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, apiv1.EventSource{Component: "vngcloud-ingress-controller"})
 
 	controller := &Controller{
-		config:         &conf,
-		kubeClient:     kubeClient,
-		SecretTrackers: NewSecretTracker(),
+		config:     &conf,
+		kubeClient: kubeClient,
 
 		queue:               queue,
 		stopCh:              make(chan struct{}),
@@ -348,10 +344,6 @@ func (c *Controller) nodeSyncLoop() {
 		c.isUpdateDefaultPool = false
 		isReApply = true
 	}
-	if c.SecretTrackers.CheckSecretTrackerChange(c.kubeClient) {
-		isReApply = true
-		klog.Infof("Detected change in secret tracker")
-	}
 
 	lbs, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
 	if err != nil {
@@ -457,7 +449,7 @@ func (c *Controller) processItem(event Event) error {
 			c.recorder.Event(ing, apiv1.EventTypeNormal, "Deleted", fmt.Sprintf("Ingress %s", key))
 		}
 	}
-	klog.Infoln("DONE processItem()")
+	klog.Infoln("----- DONE -----")
 	return nil
 }
 
@@ -673,19 +665,6 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 	return nil
 }
 
-// /////////////////////////////////// PRIVATE METHOD /////////////////////////////////////////
-func (c *Controller) mapHostTLS(ing *nwv1.Ingress) (map[string]bool, []string) {
-	m := make(map[string]bool)
-	certArr := make([]string, 0)
-	for _, tls := range ing.Spec.TLS {
-		for _, host := range tls.Hosts {
-			certArr = append(certArr, strings.TrimSpace(tls.SecretName))
-			m[host] = true
-		}
-	}
-	return m, certArr
-}
-
 // inspectCurrentLB inspects the current load balancer (LB) identified by lbID.
 // It retrieves information about the listeners, pools, and policies associated with the LB.
 // The function returns an IngressInspect struct containing the inspected data, or an error if the inspection fails.
@@ -787,7 +766,6 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 				PolicyExpander:       make([]*utils.PolicyExpander, 0),
 				PoolExpander:         make([]*utils.PoolExpander, 0),
 				ListenerExpander:     make([]*utils.ListenerExpander, 0),
-				CertificateExpander:  make([]*utils.CertificateExpander, 0),
 				SecurityGroups:       make([]string, 0),
 				SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
 			}}, nil
@@ -803,7 +781,6 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		PolicyExpander:       make([]*utils.PolicyExpander, 0),
 		PoolExpander:         make([]*utils.PoolExpander, 0),
 		ListenerExpander:     make([]*utils.ListenerExpander, 0),
-		CertificateExpander:  make([]*utils.CertificateExpander, 0),
 		SecurityGroups:       make([]string, 0),
 		InstanceIDs:          make([]string, 0),
 		SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
@@ -861,25 +838,16 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 	ingressInspect.LbOptions.SubnetID = subnetID
 	ingressInspect.InstanceIDs = providerIDs
 
-	mapTLS, certArr := c.mapHostTLS(ing)
-	// convert to vngcloud certificate
-	for _, tls := range ing.Spec.TLS {
-		// check if certificate already exist
-		secret, err := c.kubeClient.CoreV1().Secrets(ing.Namespace).Get(context.TODO(), tls.SecretName, apimetav1.GetOptions{})
-		if err != nil {
-			klog.Errorf("error when get secret: %s in ns %s: %v", tls.SecretName, ing.Namespace, err)
-			return nil, err
+	mapHostTLS := func(ing *nwv1.Ingress) map[string]bool {
+		m := make(map[string]bool)
+		for _, tls := range ing.Spec.TLS {
+			for _, host := range tls.Hosts {
+				m[host] = true
+			}
 		}
-		version := secret.ObjectMeta.ResourceVersion
-		name := utils.GenerateCertificateName(ing.Namespace, tls.SecretName)
-		secretName := tls.SecretName
-		ingressInspect.CertificateExpander = append(ingressInspect.CertificateExpander, &utils.CertificateExpander{
-			Name:       name,
-			Version:    version,
-			SecretName: secretName,
-			UUID:       "",
-		})
+		return m
 	}
+	mapTLS := mapHostTLS(ing)
 
 	GetPoolExpander := func(service *nwv1.IngressServiceBackend) (*utils.PoolExpander, error) {
 		serviceName := fmt.Sprintf("%s/%s", ing.ObjectMeta.Namespace, service.Name)
@@ -938,22 +906,24 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 	ingressInspect.DefaultPool.CreateOpts = *defaultPool
 
 	// ensure http listener and https listener
-	AddDefaultListener := func() {
-		if len(certArr) > 0 {
+	if len(ing.Spec.TLS) > 0 {
+		if len(serviceConf.CertificateIDs) < 1 {
+			klog.Errorf("No certificate found, need to specific annotaion: %s", ServiceAnnotationCertificateIDs)
+			return nil, vErrors.ErrNoCertificateFound
+		} else {
 			listenerHttpsOpts := serviceConf.CreateListenerOptions(true)
-			listenerHttpsOpts.CertificateAuthorities = &certArr
-			listenerHttpsOpts.DefaultCertificateAuthority = &certArr[0]
+			listenerHttpsOpts.CertificateAuthorities = &(serviceConf.CertificateIDs)
+			listenerHttpsOpts.DefaultCertificateAuthority = &(serviceConf.CertificateIDs[0])
 			listenerHttpsOpts.ClientCertificate = PointerOf[string]("")
 			ingressInspect.ListenerExpander = append(ingressInspect.ListenerExpander, &utils.ListenerExpander{
 				CreateOpts: *listenerHttpsOpts,
 			})
 		}
-
-		ingressInspect.ListenerExpander = append(ingressInspect.ListenerExpander, &utils.ListenerExpander{
-			CreateOpts: *(serviceConf.CreateListenerOptions(false)),
-		})
 	}
-	AddDefaultListener()
+
+	ingressInspect.ListenerExpander = append(ingressInspect.ListenerExpander, &utils.ListenerExpander{
+		CreateOpts: *(serviceConf.CreateListenerOptions(false)),
+	})
 
 	for ruleIndex, rule := range ing.Spec.Rules {
 		_, isHttpsListener := mapTLS[rule.Host]
@@ -1072,7 +1042,7 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 		}
 	}
 	checkDetailLB()
-	return inspect.serviceConf.LoadBalancerName, nil
+	return inspect.serviceConf.LoadBalancerID, nil
 }
 
 func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *Expander) (*lObjects.LoadBalancer, error) {
@@ -1089,45 +1059,6 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	}
 
 	utils.MapIDExpander(oldIngExpander.IngressInspect, curLBExpander) // ..........................................
-	for _, cert := range oldIngExpander.CertificateExpander {
-		c.SecretTrackers.RemoveSecretTracker(oldIngExpander.Namespace, cert.SecretName)
-	}
-	for _, cert := range newIngExpander.CertificateExpander {
-		c.SecretTrackers.AddSecretTracker(newIngExpander.Namespace, cert.SecretName, cert.UUID, cert.Version)
-	}
-	// ensure certificate
-	EnsureCertificate := func(ing *utils.IngressInspect) error {
-		lCert, _ := vngcloudutil.ListCertificate(c.vLBSC, c.getProjectID())
-		for _, cert := range ing.CertificateExpander {
-			// check if certificate already exist
-			for _, lc := range lCert {
-				if lc.Name == cert.Name+cert.Version {
-					cert.UUID = lc.UUID
-					break
-				}
-			}
-			if cert.UUID != "" {
-				continue
-			}
-			importOpts, err := c.toVngCloudCertificate(cert.SecretName, ing.Namespace, cert.Name+cert.Version)
-			if err != nil {
-				klog.Errorln("error when toVngCloudCertificate", err)
-				return err
-			}
-			newCert, err := vngcloudutil.ImportCertificate(c.vLBSC, c.getProjectID(), importOpts)
-			if err != nil {
-				klog.Errorln("error when import certificate", err)
-				return err
-			}
-			cert.UUID = newCert.UUID
-		}
-		return nil
-	}
-	err = EnsureCertificate(newIngExpander.IngressInspect)
-	if err != nil {
-		klog.Errorln("error when ensure certificate", err)
-		return nil, err
-	}
 
 	var defaultPool *lObjects.Pool
 	if newIngExpander.DefaultPool != nil {
@@ -1169,19 +1100,6 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	mapListenerNameIndex := make(map[string]int)
 	for listenerIndex, ilistener := range newIngExpander.ListenerExpander {
 		ilistener.CreateOpts.DefaultPoolId = defaultPool.UUID
-		// change cert name by uuid
-		if ilistener.CreateOpts.ListenerProtocol == listener.CreateOptsListenerProtocolOptHTTPS {
-			mapCertNameUUID := make(map[string]string)
-			for _, cert := range newIngExpander.CertificateExpander {
-				mapCertNameUUID[cert.SecretName] = cert.UUID
-			}
-			uuidArr := []string{}
-			for _, certName := range *ilistener.CreateOpts.CertificateAuthorities {
-				uuidArr = append(uuidArr, mapCertNameUUID[certName])
-			}
-			ilistener.CreateOpts.CertificateAuthorities = &uuidArr
-			ilistener.CreateOpts.DefaultCertificateAuthority = &uuidArr[0]
-		}
 		lis, err := c.ensureListener(lb.UUID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure listener:", ilistener.CreateOpts.ListenerName, err)
@@ -1274,23 +1192,6 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 			klog.Infof("pool in use: %v, not delete", oldIngPool.PoolName)
 		}
 	}
-
-	// ensure certificate
-	DeleteRedundantCertificate := func(ing *utils.IngressInspect) {
-		lCert, _ := vngcloudutil.ListCertificate(c.vLBSC, c.getProjectID())
-		for _, lc := range lCert {
-			for _, cert := range ing.CertificateExpander {
-				if strings.HasPrefix(lc.Name, cert.Name) && !lc.InUse {
-					err := vngcloudutil.DeleteCertificate(c.vLBSC, c.getProjectID(), lc.UUID)
-					if err != nil {
-						klog.Errorln("error when delete certificate:", lc.UUID, err)
-					}
-				}
-			}
-		}
-	}
-	DeleteRedundantCertificate(oldIngExpander.IngressInspect)
-	DeleteRedundantCertificate(newIngExpander.IngressInspect)
 	return lb, nil
 }
 
@@ -1635,37 +1536,6 @@ func (c *Controller) ensureTags(lbID string, tags map[string]string) error {
 
 func (c *Controller) getProjectID() string {
 	return c.extraInfo.ProjectID
-}
-
-func (c *Controller) toVngCloudCertificate(secretName string, namespace string, generateName string) (*certificates.ImportOpts, error) {
-	secret, err := c.kubeClient.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, apimetav1.GetOptions{})
-	if err != nil {
-		klog.Errorln("error when get secret", err)
-		return nil, err
-	}
-
-	var keyDecode []byte
-	if keyBytes, isPresent := secret.Data[consts.IngressSecretKeyName]; isPresent {
-		keyDecode = keyBytes
-	} else {
-		return nil, fmt.Errorf("%s key doesn't exist in the secret %s", consts.IngressSecretKeyName, secretName)
-	}
-
-	var certDecode []byte
-	if certBytes, isPresent := secret.Data[consts.IngressSecretCertName]; isPresent {
-		certDecode = certBytes
-	} else {
-		return nil, fmt.Errorf("%s key doesn't exist in the secret %s", consts.IngressSecretCertName, secretName)
-	}
-
-	return &certificates.ImportOpts{
-		Name:             generateName,
-		Type:             certificates.ImportOptsTypeOptTLS,
-		Certificate:      string(certDecode),
-		PrivateKey:       PointerOf[string](string(keyDecode)),
-		CertificateChain: PointerOf[string](""),
-		Passphrase:       PointerOf[string](""),
-	}, nil
 }
 
 // NAME RESOURCE

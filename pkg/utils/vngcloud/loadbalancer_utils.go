@@ -122,17 +122,36 @@ func ComparePoolOptions(ipool *lObjects.Pool, poolOptions *pool.CreateOpts) *poo
 		TLSEncryption: poolOptions.TLSEncryption,
 		HealthMonitor: poolOptions.HealthMonitor,
 	}
-	if ipool.LoadBalanceMethod != string(poolOptions.Algorithm) ||
-		(poolOptions.Stickiness != nil && ipool.Stickiness != *poolOptions.Stickiness) ||
-		(poolOptions.TLSEncryption != nil && ipool.TLSEncryption != *poolOptions.TLSEncryption) {
+	if ipool.LoadBalanceMethod != string(poolOptions.Algorithm) {
+		klog.V(5).Infof("pool need update algorithm: %s", poolOptions.Algorithm)
 		isNeedUpdate = true
 	}
-	if ipool.HealthMonitor.HealthyThreshold != poolOptions.HealthMonitor.HealthyThreshold ||
-		ipool.HealthMonitor.UnhealthyThreshold != poolOptions.HealthMonitor.UnhealthyThreshold ||
-		ipool.HealthMonitor.Interval != poolOptions.HealthMonitor.Interval ||
-		ipool.HealthMonitor.Timeout != poolOptions.HealthMonitor.Timeout {
+	if poolOptions.Stickiness != nil && ipool.Stickiness != *poolOptions.Stickiness {
+		klog.V(5).Info("pool need update stickiness")
 		isNeedUpdate = true
 	}
+	if poolOptions.TLSEncryption != nil && ipool.TLSEncryption != *poolOptions.TLSEncryption {
+		klog.V(5).Infof("pool need update tls encryption")
+		isNeedUpdate = true
+	}
+
+	if ipool.HealthMonitor.HealthyThreshold != poolOptions.HealthMonitor.HealthyThreshold {
+		klog.V(5).Infof("pool need update healthy threshold: %d", poolOptions.HealthMonitor.HealthyThreshold)
+		isNeedUpdate = true
+	}
+	if ipool.HealthMonitor.UnhealthyThreshold != poolOptions.HealthMonitor.UnhealthyThreshold {
+		klog.V(5).Infof("pool need update unhealthy threshold: %d", poolOptions.HealthMonitor.UnhealthyThreshold)
+		isNeedUpdate = true
+	}
+	if ipool.HealthMonitor.Interval != poolOptions.HealthMonitor.Interval {
+		klog.V(5).Infof("pool need update interval: %d", poolOptions.HealthMonitor.Interval)
+		isNeedUpdate = true
+	}
+	if ipool.HealthMonitor.Timeout != poolOptions.HealthMonitor.Timeout {
+		klog.V(5).Infof("pool need update timeout: %d", poolOptions.HealthMonitor.Timeout)
+		isNeedUpdate = true
+	}
+
 	if ipool.HealthMonitor.HealthCheckProtocol == "HTTP" && poolOptions.HealthMonitor.HealthCheckProtocol == pool.CreateOptsHealthCheckProtocolOptHTTP {
 		// domain may return nil
 		if ipool.HealthMonitor.HealthCheckPath == nil || *ipool.HealthMonitor.HealthCheckPath != *poolOptions.HealthMonitor.HealthCheckPath ||
