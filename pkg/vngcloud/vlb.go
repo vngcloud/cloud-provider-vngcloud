@@ -20,7 +20,6 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
-	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	lCoreV1 "k8s.io/api/core/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -856,19 +855,21 @@ func (s *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 				klog.Errorln("error when list security group rules", err)
 				return err
 			}
-			for _, rule := range secgroupRules {
-				if rule.Direction == string(secgroup_rule.CreateOptsDirectionOptIngress) {
-					err := vngcloudutil.DeleteSecurityGroupRule(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID, rule.UUID)
-					if err != nil {
-						klog.Errorln("error when delete security group rule", err)
-						return err
-					}
-				}
-			}
 
 			for _, rule := range inspect.SecGroupRuleExpander {
 				rule.CreateOpts.SecurityGroupID = defaultSecgroup.UUID
 				rule.CreateOpts.RemoteIPPrefix = inspect.AllowCIDR
+			}
+
+			needDelete, needCreate := vngcloudutil.CompareSecgroupRule(secgroupRules, inspect.SecGroupRuleExpander)
+			for _, ruleID := range needDelete {
+				err := vngcloudutil.DeleteSecurityGroupRule(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID, ruleID)
+				if err != nil {
+					klog.Errorln("error when delete security group rule", err)
+					return err
+				}
+			}
+			for _, rule := range needCreate {
 				_, err := vngcloudutil.CreateSecurityGroupRule(s.vServerSC, s.getProjectID(), defaultSecgroup.UUID, &rule.CreateOpts)
 				if err != nil {
 					klog.Errorln("error when create security group rule", err)

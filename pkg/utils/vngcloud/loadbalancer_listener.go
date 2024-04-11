@@ -9,7 +9,7 @@ import (
 )
 
 func CreateListener(client *client.ServiceClient, projectID string, lbID string, opt *listener.CreateOpts) (*lObjects.Listener, error) {
-	klog.V(5).Infoln("[API] CreateListener: ", "lbID: ", lbID)
+	klog.V(5).Infoln("[API] CreateListener: ", "lbID: ", lbID, opt.ListenerName, opt.DefaultPoolId, opt.ListenerProtocol, opt.AllowedCidrs, opt.ListenerProtocolPort, opt.TimeoutClient, opt.TimeoutConnection, opt.TimeoutMember, opt.CertificateAuthorities, opt.ClientCertificate, opt.DefaultCertificateAuthority)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 
@@ -25,17 +25,15 @@ func CreateListener(client *client.ServiceClient, projectID string, lbID string,
 			break
 		}
 	}
-	klog.V(5).Infoln("[API] CreateListener: ", "resp: ", resp, "err: ", err)
 	return resp, err
 }
 
 func ListListenerOfLB(client *client.ServiceClient, projectID string, lbID string) ([]*lObjects.Listener, error) {
-	// klog.V(5).Infoln("[API] ListListenerOfLB: ", "lbID: ", lbID)
+	klog.V(5).Infoln("[API] ListListenerOfLB: ", "lbID: ", lbID)
 	opt := &listener.GetBasedLoadBalancerOpts{}
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 	resp, err := listener.GetBasedLoadBalancer(client, opt)
-	// klog.V(5).Infoln("[API] ListListenerOfLB: ", "resp: ", resp, "err: ", err)
 	return resp, err
 }
 

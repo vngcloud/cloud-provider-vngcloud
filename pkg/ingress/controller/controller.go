@@ -1428,19 +1428,21 @@ func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 				klog.Errorln("error when list security group rules", err)
 				return err
 			}
-			for _, rule := range secgroupRules {
-				if rule.Direction == string(secgroup_rule.CreateOptsDirectionOptIngress) {
-					err := vngcloudutil.DeleteSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, rule.UUID)
-					if err != nil {
-						klog.Errorln("error when delete security group rule", err)
-						return err
-					}
-				}
-			}
 
 			for _, rule := range inspect.SecGroupRuleExpander {
 				rule.CreateOpts.SecurityGroupID = defaultSecgroup.UUID
 				rule.CreateOpts.RemoteIPPrefix = inspect.AllowCIDR
+			}
+
+			needDelete, needCreate := vngcloudutil.CompareSecgroupRule(secgroupRules, inspect.SecGroupRuleExpander)
+			for _, ruleID := range needDelete {
+				err := vngcloudutil.DeleteSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, ruleID)
+				if err != nil {
+					klog.Errorln("error when delete security group rule", err)
+					return err
+				}
+			}
+			for _, rule := range needCreate {
 				_, err := vngcloudutil.CreateSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, &rule.CreateOpts)
 				if err != nil {
 					klog.Errorln("error when create security group rule", err)
