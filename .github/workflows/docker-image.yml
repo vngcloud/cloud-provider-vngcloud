@@ -45,5 +45,4 @@ jobs:
           push: true
           tags: |
             ${{ steps.meta.outputs.tags }}
-            latest
           target: ${{ matrix.image }}
