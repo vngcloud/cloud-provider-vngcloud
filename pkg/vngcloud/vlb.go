@@ -944,9 +944,6 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 }
 
 func (c *vLB) ensureTags(lbID string, tags map[string]string) error {
-	if len(tags) < 1 {
-		return nil
-	}
 	// get tags of lb
 	getTags, err := vngcloudutil.GetTags(c.vServerSC, c.getProjectID(), lbID)
 	if err != nil {
@@ -964,6 +961,12 @@ func (c *vLB) ensureTags(lbID string, tags map[string]string) error {
 			isNeedUpdate = true
 			tagMap[key] = value
 		}
+	}
+	vksClusterTags := tagMap[consts.VKS_TAG_KEY]
+	newTags := vngcloudutil.JoinVKSTag(vksClusterTags, c.getClusterID())
+	if newTags != vksClusterTags {
+		isNeedUpdate = true
+		tagMap[consts.VKS_TAG_KEY] = newTags
 	}
 	if !isNeedUpdate {
 		klog.Infof("No need to update tags for lb: %v", lbID)

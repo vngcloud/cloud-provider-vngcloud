@@ -18,6 +18,10 @@ const (
 	DEFAULT_L4_PACKAGE_ID             = "lbp-96b6b072-aadb-4b58-9d5f-c16ad69d36aa" // ...............................
 	DEFAULT_HTTPS_LISTENER_NAME       = "vks_https_listener"
 	DEFAULT_HTTP_LISTENER_NAME        = "vks_http_listener"
+	VKS_TAG_KEY                       = "vks-cluster-ids"
+	VKS_TAGS_SEPARATOR                = "_"
+	VKS_CLUSTER_ID_PREFIX             = "k8s-"
+	VKS_CLUSTER_ID_LENGTH             = 40
 
 	// DeprecatedLabelNodeRoleMaster specifies that a node is a master
 	// It's copied over to kubeadm until it's merged in core: https://github.com/kubernetes/kubernetes/pull/39112
