@@ -87,7 +87,7 @@ type Controller struct {
 	vServerSC *vconSdkClient.ServiceClient
 	extraInfo *vngcloudutil.ExtraInfo
 
-	isReApplyNextTime bool // it have a bug when update default pool member, set this to reapply when update pool member
+	isReApplyNextTime   bool // it have a bug when update default pool member, set this to reapply when update pool member
 	trackLBUpdate       *utils.UpdateTracker
 	mu                  sync.Mutex
 	numOfUpdatingThread int
@@ -406,7 +406,7 @@ func (c *Controller) processNextItem() bool {
 	return true
 }
 
-func (c *Controller) processItem(event Event) error {
+func (c *Controller) processItem(event Event) {
 	klog.Infoln("EVENT:", event.Type)
 
 	c.addUpdatingThread()
@@ -451,7 +451,7 @@ func (c *Controller) processItem(event Event) error {
 		}
 	}
 	klog.Infoln("----- DONE -----")
-	return nil
+	// return nil
 }
 
 func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
@@ -1044,11 +1044,8 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 }
 
 func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *Expander) (*lObjects.LoadBalancer, error) {
-	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
-	if err != nil {
-		klog.Errorln("error when wait for lb active", err)
-		return nil, err
-	}
+	var err error
+	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
 
 	curLBExpander, err := c.inspectCurrentLB(lbID)
 	if err != nil {
@@ -1061,7 +1058,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	var defaultPool *lObjects.Pool
 	if newIngExpander.DefaultPool != nil {
 		// ensure default pool
-		defaultPool, err = c.ensurePool(lb.UUID, &newIngExpander.DefaultPool.CreateOpts)
+		defaultPool, err = c.ensurePool(lbID, &newIngExpander.DefaultPool.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure default pool", err)
 			return nil, err
@@ -1069,9 +1066,9 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 
 		// ensure default pool member
 		if oldIngExpander != nil && oldIngExpander.DefaultPool != nil && oldIngExpander.DefaultPool.Members != nil {
-			_, err = c.ensureDefaultPoolMember(lb.UUID, defaultPool.UUID, oldIngExpander.DefaultPool.Members, newIngExpander.DefaultPool.Members)
+			_, err = c.ensureDefaultPoolMember(lbID, defaultPool.UUID, oldIngExpander.DefaultPool.Members, newIngExpander.DefaultPool.Members)
 		} else {
-			_, err = c.ensureDefaultPoolMember(lb.UUID, defaultPool.UUID, nil, newIngExpander.DefaultPool.Members)
+			_, err = c.ensureDefaultPoolMember(lbID, defaultPool.UUID, nil, newIngExpander.DefaultPool.Members)
 		}
 		if err != nil {
 			klog.Errorln("error when ensure default pool member", err)
@@ -1082,14 +1079,14 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	// ensure all from newIngExpander
 	mapPoolNameIndex := make(map[string]int)
 	for poolIndex, ipool := range newIngExpander.PoolExpander {
-		newPool, err := c.ensurePool(lb.UUID, &ipool.CreateOpts)
+		newPool, err := c.ensurePool(lbID, &ipool.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure pool", err)
 			return nil, err
 		}
 		ipool.UUID = newPool.UUID
 		mapPoolNameIndex[ipool.PoolName] = poolIndex
-		_, err = c.ensurePoolMember(lb.UUID, newPool.UUID, ipool.Members)
+		_, err = c.ensurePoolMember(lbID, newPool.UUID, ipool.Members)
 		if err != nil {
 			klog.Errorln("error when ensure pool member", err)
 			return nil, err
@@ -1098,7 +1095,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	mapListenerNameIndex := make(map[string]int)
 	for listenerIndex, ilistener := range newIngExpander.ListenerExpander {
 		ilistener.CreateOpts.DefaultPoolId = defaultPool.UUID
-		lis, err := c.ensureListener(lb.UUID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
+		lis, err := c.ensureListener(lbID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure listener:", ilistener.CreateOpts.ListenerName, err)
 			return nil, err
@@ -1136,7 +1133,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 			RedirectPoolID: poolID,
 			Rules:          ipolicy.L7Rules,
 		}
-		_, err := c.ensurePolicy(lb.UUID, listenerID, ipolicy.Name, policyOpts)
+		_, err := c.ensurePolicy(lbID, listenerID, ipolicy.Name, policyOpts)
 		if err != nil {
 			klog.Errorln("error when ensure policy", err)
 			return nil, err
@@ -1162,7 +1159,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 		_, isPolicyWillUse := policyWillUse[oldIngPolicy.Name]
 		if !isPolicyWillUse {
 			klog.Warningf("policy not in use: %v, delete", oldIngPolicy.Name)
-			_, err := c.deletePolicy(lb.UUID, oldIngPolicy.ListenerID, oldIngPolicy.Name)
+			_, err := c.deletePolicy(lbID, oldIngPolicy.ListenerID, oldIngPolicy.Name)
 			if err != nil {
 				klog.Errorln("error when ensure policy", err)
 				// maybe it's already deleted
@@ -1179,7 +1176,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 		_, isPoolWillUse := poolWillUse[oldIngPool.PoolName]
 		if !isPoolWillUse && oldIngPool.PoolName != consts.DEFAULT_NAME_DEFAULT_POOL {
 			klog.Warningf("pool not in use: %v, delete", oldIngPool.PoolName)
-			_, err := c.deletePool(lb.UUID, oldIngPool.PoolName)
+			_, err := c.deletePool(lbID, oldIngPool.PoolName)
 			if err != nil {
 				klog.Errorln("error when ensure pool", err)
 				// maybe it's already deleted
@@ -1189,6 +1186,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 			klog.Infof("pool in use: %v, not delete", oldIngPool.PoolName)
 		}
 	}
+	lb, _ := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), lbID)
 	return lb, nil
 }
 
@@ -1417,12 +1415,12 @@ func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			klog.Errorln("error when get default security group", err)
 			return err
 		}
-		ensureDefaultSecgroupRule := func() error {
+		ensureDefaultSecgroupRule := func() {
 			// clear all inbound rules
 			secgroupRules, err := vngcloudutil.ListSecurityGroupRules(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID)
 			if err != nil {
 				klog.Errorln("error when list security group rules", err)
-				return err
+				return
 			}
 
 			for _, rule := range inspect.SecGroupRuleExpander {
@@ -1435,17 +1433,16 @@ func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 				err := vngcloudutil.DeleteSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, ruleID)
 				if err != nil {
 					klog.Errorln("error when delete security group rule", err)
-					return err
+					return
 				}
 			}
 			for _, rule := range needCreate {
 				_, err := vngcloudutil.CreateSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, &rule.CreateOpts)
 				if err != nil {
 					klog.Errorln("error when create security group rule", err)
-					return err
+					return
 				}
 			}
-			return nil
 		}
 		ensureDefaultSecgroupRule()
 		inspect.SecurityGroups = []string{defaultSecgroup.UUID}

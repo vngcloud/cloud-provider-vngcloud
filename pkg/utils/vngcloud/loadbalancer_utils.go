@@ -72,7 +72,7 @@ func FindListenerByPort(client *client.ServiceClient, projectID string, lbID str
 	return nil, errors.ErrNotFound
 }
 
-func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string) (*lObjects.LoadBalancer, error) {
+func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string) {
 	klog.Infof("Waiting for load balancer %s to be ready", lbID)
 	var resultLb *lObjects.LoadBalancer
 
@@ -104,10 +104,11 @@ func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string
 	})
 
 	if wait.Interrupted(err) {
-		err = fmt.Errorf("timeout waiting for the loadbalancer %s with lb status %s", lbID, resultLb.Status)
+		// err = fmt.Errorf("timeout waiting for the loadbalancer %s with lb status %s", lbID, resultLb.Status)
+		klog.Errorf("timeout waiting for the loadbalancer %s with lb status %s", lbID, resultLb.Status)
 	}
 
-	return resultLb, err
+	// return resultLb, err
 }
 
 func ComparePoolOptions(ipool *lObjects.Pool, poolOptions *pool.CreateOpts) *pool.UpdateOpts {

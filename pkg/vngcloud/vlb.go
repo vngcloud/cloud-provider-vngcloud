@@ -209,7 +209,7 @@ func (c *vLB) ensureLoadBalancer(
 	klog.V(5).Infof("processing load balancer status")
 	lbStatus := c.createLoadBalancerStatus(pService, lb)
 
-	userLb, _ := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lb.UUID)
+	userLb, _ := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), lb.UUID)
 	c.trackLBUpdate.AddUpdateTracker(userLb.UUID, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name), userLb.UpdatedAt)
 	c.serviceCache[serviceKey] = pService.DeepCopy()
 
@@ -596,23 +596,20 @@ func (c *vLB) GetLoadbalancerIDByService(pService *lCoreV1.Service) (string, err
 }
 
 func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *Expander) (*lObjects.LoadBalancer, error) {
-	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
-	if err != nil {
-		klog.Errorln("error when wait for lb active", err)
-		return nil, err
-	}
+	var err error
+	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
 
 	// ensure all from newIngExpander
 	mapPoolNameIndex := make(map[string]int)
 	for poolIndex, ipool := range newIngExpander.PoolExpander {
-		newPool, err := c.ensurePoolV2(lb.UUID, &ipool.CreateOpts)
+		newPool, err := c.ensurePoolV2(lbID, &ipool.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure pool", err)
 			return nil, err
 		}
 		ipool.UUID = newPool.UUID
 		mapPoolNameIndex[ipool.PoolName] = poolIndex
-		_, err = c.ensurePoolMember(lb.UUID, newPool.UUID, ipool.Members)
+		_, err = c.ensurePoolMember(lbID, newPool.UUID, ipool.Members)
 		if err != nil {
 			klog.Errorln("error when ensure pool member", err)
 			return nil, err
@@ -627,7 +624,7 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 		}
 		ilistener.CreateOpts.DefaultPoolId = newIngExpander.PoolExpander[poolIndex].UUID
 
-		lis, err := c.ensureListenerV2(lb.UUID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
+		lis, err := c.ensureListenerV2(lbID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure listener:", ilistener.CreateOpts.ListenerName, err)
 			return nil, err
@@ -655,7 +652,7 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 		_, isInUse := listenerWillUse[oListener.ListenerName]
 		if !isInUse {
 			klog.Warningf("listener not in use: %v, delete", oListener.ListenerName)
-			_, err := c.deleteListener(lb.UUID, oListener.ListenerName)
+			_, err := c.deleteListener(lbID, oListener.ListenerName)
 			if err != nil {
 				klog.Errorln("error when ensure listener", err)
 				// maybe it's already deleted
@@ -672,7 +669,7 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 		_, isPoolWillUse := poolWillUse[oldIngPool.PoolName]
 		if !isPoolWillUse && oldIngPool.PoolName != consts.DEFAULT_NAME_DEFAULT_POOL {
 			klog.Warningf("pool not in use: %v, delete", oldIngPool.PoolName)
-			_, err := c.deletePool(lb.UUID, oldIngPool.PoolName)
+			_, err := c.deletePool(lbID, oldIngPool.PoolName)
 			if err != nil {
 				klog.Errorln("error when ensure pool", err)
 				// maybe it's already deleted
@@ -682,6 +679,7 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 			klog.Infof("pool in use: %v, not delete", oldIngPool.PoolName)
 		}
 	}
+	lb, _ := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), lbID)
 	return lb, nil
 }
 
@@ -847,12 +845,12 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			klog.Errorln("error when get default security group", err)
 			return err
 		}
-		ensureDefaultSecgroupRule := func() error {
+		ensureDefaultSecgroupRule := func() {
 			// clear all inbound rules
 			secgroupRules, err := vngcloudutil.ListSecurityGroupRules(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID)
 			if err != nil {
 				klog.Errorln("error when list security group rules", err)
-				return err
+				return
 			}
 
 			for _, rule := range inspect.SecGroupRuleExpander {
@@ -865,17 +863,16 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 				err := vngcloudutil.DeleteSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, ruleID)
 				if err != nil {
 					klog.Errorln("error when delete security group rule", err)
-					return err
+					return
 				}
 			}
 			for _, rule := range needCreate {
 				_, err := vngcloudutil.CreateSecurityGroupRule(c.vServerSC, c.getProjectID(), defaultSecgroup.UUID, &rule.CreateOpts)
 				if err != nil {
 					klog.Errorln("error when create security group rule", err)
-					return err
+					return
 				}
 			}
-			return nil
 		}
 		ensureDefaultSecgroupRule()
 		inspect.SecurityGroups = []string{defaultSecgroup.UUID}
