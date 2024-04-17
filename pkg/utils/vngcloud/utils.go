@@ -107,6 +107,8 @@ func HealthcheckProtocoToSecGroupProtocol(p string) secgroup_rule.CreateOptsProt
 		return secgroup_rule.CreateOptsProtocolOptTCP
 	case "udp":
 		return secgroup_rule.CreateOptsProtocolOptUDP
+	case "icmp":
+		return secgroup_rule.CreateOptsProtocolOptICMP
 	default:
 		return secgroup_rule.CreateOptsProtocolOptTCP
 	}

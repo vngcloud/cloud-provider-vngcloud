@@ -472,6 +472,10 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 			if serviceConf.IsAutoCreateSecurityGroup {
 				ingressInspect.AddSecgroupRule(monitorPort,
 					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
+				if strings.EqualFold(string(port.Protocol), "UDP") {
+					ingressInspect.AddSecgroupRule(monitorPort,
+						vngcloudutil.HealthcheckProtocoToSecGroupProtocol("ICMP"))
+				}
 			}
 		}
 
@@ -494,6 +498,10 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 			if serviceConf.IsAutoCreateSecurityGroup {
 				ingressInspect.AddSecgroupRule(int(port.NodePort),
 					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
+				if strings.EqualFold(string(port.Protocol), "UDP") {
+					ingressInspect.AddSecgroupRule(monitorPort,
+						vngcloudutil.HealthcheckProtocoToSecGroupProtocol("ICMP"))
+				}
 			}
 		}
 
