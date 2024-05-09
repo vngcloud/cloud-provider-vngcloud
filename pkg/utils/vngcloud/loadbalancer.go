@@ -24,7 +24,10 @@ func ListLB(client *client.ServiceClient, projectID string) ([]*objects.LoadBala
 	opt := &loadbalancer.ListOpts{}
 	opt.ProjectID = projectID
 	resp, err := loadbalancer.List(client, opt)
-	return resp, err
+	if err != nil {
+		return resp, err.Error
+	}
+	return resp, nil
 }
 
 func GetLB(client *client.ServiceClient, projectID string, lbID string) (*objects.LoadBalancer, error) {
@@ -35,7 +38,10 @@ func GetLB(client *client.ServiceClient, projectID string, lbID string) (*object
 
 	resp, err := loadbalancer.Get(client, opt)
 	// klog.V(5).Infoln("[API] GetLB: ", "resp: ", resp, "err: ", err)
-	return resp, err
+	if err != nil {
+		return resp, err.Error
+	}
+	return resp, nil
 }
 
 func CreateLB(client *client.ServiceClient, projectID string, lbOptions *loadbalancer.CreateOpts) (*objects.LoadBalancer, error) {

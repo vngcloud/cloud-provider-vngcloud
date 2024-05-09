@@ -231,7 +231,7 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		TimeoutClient:               lisOptions.TimeoutClient,
 		TimeoutMember:               lisOptions.TimeoutMember,
 		TimeoutConnection:           lisOptions.TimeoutConnection,
-		DefaultPoolId:               lisOptions.DefaultPoolId,
+		DefaultPoolId:               *lisOptions.DefaultPoolId,
 		DefaultCertificateAuthority: lisOptions.DefaultCertificateAuthority,
 		// Headers:                     lisOptions.Headers,
 		// ClientCertificate:           lisOptions.ClientCertificateAuthentication,
@@ -244,8 +244,8 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		isNeedUpdate = true
 	}
 
-	if ilis.DefaultPoolId != lisOptions.DefaultPoolId {
-		klog.Infof("listener need update default pool id: %s", lisOptions.DefaultPoolId)
+	if ilis.DefaultPoolId != *lisOptions.DefaultPoolId {
+		klog.Infof("listener need update default pool id: %s", *lisOptions.DefaultPoolId)
 		isNeedUpdate = true
 	}
 	if lisOptions.DefaultCertificateAuthority != nil && (ilis.DefaultCertificateAuthority == nil || *(ilis.DefaultCertificateAuthority) != *(lisOptions.DefaultCertificateAuthority)) {

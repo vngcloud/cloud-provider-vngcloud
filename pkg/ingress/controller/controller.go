@@ -690,7 +690,7 @@ func (c *Controller) inspectCurrentLB(lbID string) (*utils.IngressInspect, error
 	}
 	for _, lis := range liss {
 		listenerOpts := config.CreateListenerOptions(lis.Protocol == "HTTPS")
-		listenerOpts.DefaultPoolId = lis.DefaultPoolId
+		listenerOpts.DefaultPoolId = &lis.DefaultPoolId
 		expectListenerName = append(expectListenerName, &utils.ListenerExpander{
 			UUID:       lis.UUID,
 			CreateOpts: *listenerOpts,
@@ -1101,7 +1101,7 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	}
 	mapListenerNameIndex := make(map[string]int)
 	for listenerIndex, ilistener := range newIngExpander.ListenerExpander {
-		ilistener.CreateOpts.DefaultPoolId = defaultPool.UUID
+		ilistener.CreateOpts.DefaultPoolId = &defaultPool.UUID
 		lis, err := c.ensureListener(lbID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
 		if err != nil {
 			klog.Errorln("error when ensure listener:", ilistener.CreateOpts.ListenerName, err)

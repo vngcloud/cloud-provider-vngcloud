@@ -267,7 +267,7 @@ func (s *ServiceConfig) CreateListenerOptions(pPort apiv1.ServicePort) *listener
 		CertificateAuthorities:      nil,
 		ClientCertificate:           nil,
 		DefaultCertificateAuthority: nil,
-		DefaultPoolId:               "",
+		DefaultPoolId:               PointerOf(""),
 		TimeoutClient:               s.IdleTimeoutClient,
 		TimeoutMember:               s.IdleTimeoutMember,
 		TimeoutConnection:           s.IdleTimeoutConnection,

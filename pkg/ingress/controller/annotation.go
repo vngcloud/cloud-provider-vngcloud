@@ -296,7 +296,7 @@ func (s *IngressConfig) CreateListenerOptions(isHTTPS bool) *listener.CreateOpts
 		CertificateAuthorities:      nil,
 		ClientCertificate:           nil,
 		DefaultCertificateAuthority: nil,
-		DefaultPoolId:               "",
+		DefaultPoolId:               PointerOf(""),
 		TimeoutClient:               s.IdleTimeoutClient,
 		TimeoutMember:               s.IdleTimeoutMember,
 		TimeoutConnection:           s.IdleTimeoutConnection,

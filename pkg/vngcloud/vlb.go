@@ -646,7 +646,7 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 			klog.Errorf("pool not found in policy: %v", ilistener.DefaultPoolName)
 			return nil, err
 		}
-		ilistener.CreateOpts.DefaultPoolId = newIngExpander.PoolExpander[poolIndex].UUID
+		ilistener.CreateOpts.DefaultPoolId = PointerOf(newIngExpander.PoolExpander[poolIndex].UUID)
 
 		lis, err := c.ensureListenerV2(lbID, ilistener.CreateOpts.ListenerName, ilistener.CreateOpts)
 		if err != nil {

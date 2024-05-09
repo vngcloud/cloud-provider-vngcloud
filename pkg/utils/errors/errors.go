@@ -167,7 +167,7 @@ var (
 	ErrIngressNotFound                    = vErr.New("failed to find ingress")
 	ErrSecurityGroupNotFound              = vErr.New("failed to find security group")
 	ErrNetworkIDNotFound                  = vErr.New("failed to find network ID")
-	ErrNoCertificateFound                 = vErr.New("no certificate found")
+	ErrNoCertificateFound                 = vErr.New("no certificate found, should use annotation to specify certificate")
 	ErrListenerProtocolNotMatch           = vErr.New("listener protocol does not match")
 )
 
