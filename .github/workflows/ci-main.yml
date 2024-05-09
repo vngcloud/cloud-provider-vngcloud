@@ -1,8 +1,12 @@
-name: Docker Image CI
+name: CI Main
 
 on:
   push:
-    branches: [ "main", "dev" ]
+    branches: [ "main" ]
+
+env:
+  VERSION: v0.2.0
+  REPO: vcr.vngcloud.vn/81-vks-public
 
 jobs:
   build-and-push-image:
@@ -32,8 +36,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: vcr.vngcloud.vn
-          username: ${{ secrets.VCR_USER }}
-          password: ${{ secrets.VCR_PASSWORD }}
+          username: ${{ secrets.VCR_USER_PRO }}
+          password: ${{ secrets.VCR_PASSWORD_PRO }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -42,5 +46,6 @@ jobs:
           push: true
           tags: |
             ghcr.io/vngcloud/${{ matrix.image }}:${{ github.sha }}
-            vcr.vngcloud.vn/60108-annd2-ingress/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.REPO }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.REPO }}/${{ matrix.image }}:${{ env.VERSION }}
           target: ${{ matrix.image }}

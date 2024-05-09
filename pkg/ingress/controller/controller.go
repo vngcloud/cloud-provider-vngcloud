@@ -337,25 +337,28 @@ func (c *Controller) nodeSyncLoop() {
 	}
 
 	isReApply := false
-	if !utils.NodeSlicesEqual(readyWorkerNodes, c.knownNodes) {
-		isReApply = true
-		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
-	}
 	if c.isReApplyNextTime {
 		c.isReApplyNextTime = false
 		isReApply = true
 	}
 
-	lbs, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
-	if err != nil {
-		klog.Errorf("Failed to retrieve current set of load balancers: %v", err)
-		return
-	}
-	reapplyIngress := c.trackLBUpdate.GetReapplyIngress(lbs)
-	if len(reapplyIngress) > 0 {
+	if !isReApply && !utils.NodeSlicesEqual(readyWorkerNodes, c.knownNodes) {
 		isReApply = true
-		klog.Infof("Detected change in load balancer update tracker")
-		c.trackLBUpdate = utils.NewUpdateTracker()
+		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
+	}
+
+	if !isReApply {
+		lbs, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
+		if err != nil {
+			klog.Errorf("Failed to retrieve current set of load balancers: %v", err)
+			return
+		}
+		reapplyIngress := c.trackLBUpdate.GetReapplyIngress(lbs)
+		if len(reapplyIngress) > 0 {
+			isReApply = true
+			klog.Infof("Detected change in load balancer update tracker")
+			c.trackLBUpdate = utils.NewUpdateTracker()
+		}
 	}
 
 	if !isReApply {
@@ -465,10 +468,14 @@ func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 	lb, err := c.ensureCompareIngress(oldIng, ing)
 	if err != nil {
+		c.isReApplyNextTime = true
 		return err
 	}
 	c.trackLBUpdate.AddUpdateTracker(lb.UUID, fmt.Sprintf("%s/%s", ing.Namespace, ing.Name), lb.UpdatedAt)
 	_, err = c.updateIngressStatus(ing, lb)
+	if err != nil {
+		c.isReApplyNextTime = true
+	}
 	return err
 }
 

@@ -70,6 +70,7 @@ func (s *VContainer) LoadBalancer() (lcloudProvider.LoadBalancer, bool) {
 		config:        s.config,
 		trackLBUpdate: utils.NewUpdateTracker(),
 		serviceCache:  make(map[string]*lCoreV1.Service),
+		isReApplyNextTime: false,
 	}
 	go lb.Init()
 	s.vlb = lb

@@ -1,0 +1,51 @@
+name: CI Dev
+
+on:
+  push:
+    branches: ["dev"]
+
+env:
+  VERSION: v0.2.0
+  REPO: vcr.vngcloud.vn/60108-annd2-ingress
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: vngcloud-ingress-controller
+          - image: vngcloud-controller-manager
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.1.1
+
+      - name: Log in to the GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to the vCR
+        uses: docker/login-action@v3
+        with:
+          registry: vcr.vngcloud.vn
+          username: ${{ secrets.VCR_USER }}
+          password: ${{ secrets.VCR_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/vngcloud/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.REPO }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.REPO }}/${{ matrix.image }}:${{ env.VERSION }}
+          target: ${{ matrix.image }}

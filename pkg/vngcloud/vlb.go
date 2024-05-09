@@ -77,6 +77,7 @@ type (
 		mu                  sync.Mutex
 		numOfUpdatingThread int
 		config              *Config
+		isReApplyNextTime   bool
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -138,6 +139,9 @@ func (c *vLB) EnsureLoadBalancer(
 	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
 	klog.InfoS("EnsureLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
 	status, err := c.ensureLoadBalancer(pCtx, clusterName, pService, pNodes)
+	if err != nil {
+		c.isReApplyNextTime = true
+	}
 	return status, mc.ObserveReconcile(err)
 }
 
@@ -155,6 +159,9 @@ func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pServ
 	mc := lMetrics.NewMetricContext("loadbalancer", "update-loadbalancer")
 	klog.InfoS("UpdateLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
 	_, err := c.ensureLoadBalancer(pCtx, clusterName, pService, pNodes)
+	if err != nil {
+		c.isReApplyNextTime = true
+	}
 	return mc.ObserveReconcile(err)
 }
 
@@ -328,17 +335,23 @@ func (c *vLB) nodeSyncLoop() {
 		return
 	}
 	isReApply := false
-
-	lbs, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
-	if err != nil {
-		klog.Errorf("failed to find load balancers for cluster %s: %v", c.getClusterName(), err)
-		return
-	}
-	reapplyIngress := c.trackLBUpdate.GetReapplyIngress(lbs)
-	if len(reapplyIngress) > 0 {
+	if c.isReApplyNextTime {
+		c.isReApplyNextTime = false
 		isReApply = true
-		klog.Infof("Detected change in load balancer update tracker")
-		c.trackLBUpdate = utils.NewUpdateTracker()
+	}
+
+	if !isReApply {
+		lbs, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
+		if err != nil {
+			klog.Errorf("failed to find load balancers for cluster %s: %v", c.getClusterName(), err)
+			return
+		}
+		reapplyIngress := c.trackLBUpdate.GetReapplyIngress(lbs)
+		if len(reapplyIngress) > 0 {
+			isReApply = true
+			klog.Infof("Detected change in load balancer update tracker")
+			c.trackLBUpdate = utils.NewUpdateTracker()
+		}
 	}
 
 	if !isReApply {
@@ -348,12 +361,15 @@ func (c *vLB) nodeSyncLoop() {
 	readyWorkerNodes, err := utils.ListNodeWithPredicate(c.nodeLister, make(map[string]string, 0))
 	if err != nil {
 		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
+		c.isReApplyNextTime = true
 		return
 	}
 
 	services, err := utils.ListServiceWithPredicate(c.serviceLister)
 	if err != nil {
 		klog.Errorf("Failed to retrieve current set of services from service lister: %v", err)
+		c.isReApplyNextTime = true
+		return
 	}
 
 	for _, service := range services {

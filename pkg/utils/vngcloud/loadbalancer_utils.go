@@ -99,7 +99,7 @@ func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string
 			return true, fmt.Errorf("load balancer %s is error", lbID)
 		}
 
-		klog.Infof("Load balancer %s is not ready yet, wating...", lbID)
+		klog.Infof("Load balancer %s is not ready yet, waiting...", lbID)
 		return false, nil
 	})
 
