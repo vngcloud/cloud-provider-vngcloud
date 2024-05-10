@@ -629,6 +629,47 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 		return err
 	}
 
+	listSecgroups, err := vngcloudutil.ListSecurityGroups(c.vServerSC, c.getProjectID())
+	if err != nil {
+		klog.Errorln("error when list security groups", err)
+		listSecgroups = make([]*lObjects.Secgroup, 0)
+	}
+	defaultSecgroupName := utils.GenerateLBName(c.getClusterID(), ing.Namespace, ing.Name, consts.RESOURCE_TYPE_INGRESS)
+	for _, secgroup := range listSecgroups {
+		if secgroup.Name == defaultSecgroupName {
+			ensureSecGroupsForInstanceDelete := func(instanceID string, secgroupsID string) error {
+				// get security groups of instance
+				instance, err := vngcloudutil.GetServer(c.vServerSC, c.getProjectID(), instanceID)
+				if err != nil {
+					klog.Errorln("error when get instance", err)
+					return err
+				}
+				currentSecgroups := make([]string, 0)
+				for _, s := range instance.SecGroups {
+					currentSecgroups = append(currentSecgroups, s.Uuid)
+				}
+				newSecgroups, isNeedUpdate := utils.MergeStringArray(currentSecgroups, []string{secgroupsID}, []string{})
+				if !isNeedUpdate {
+					klog.Infof("No need to update security groups for instance: %v", instanceID)
+					return nil
+				}
+				_, err = vngcloudutil.UpdateSecGroupsOfServer(c.vServerSC, c.getProjectID(), instanceID, newSecgroups)
+				vngcloudutil.WaitForServerActive(c.vServerSC, c.getProjectID(), instanceID)
+				return err
+			}
+			for _, instanceID := range oldIngExpander.InstanceIDs {
+				err := ensureSecGroupsForInstanceDelete(instanceID, secgroup.UUID)
+				if err != nil {
+					klog.Errorln("error when ensure security groups for instance", err)
+				}
+			}
+			if err = vngcloudutil.DeleteSecurityGroup(c.vServerSC, c.getProjectID(), secgroup.UUID); err != nil {
+				klog.Errorln("error when delete security group", err)
+			}
+			break
+		}
+	}
+
 	canDeleteAllLB := func(lbID string) bool {
 		getPool, err := vngcloudutil.ListPoolOfLB(c.vLBSC, c.getProjectID(), lbID)
 		if err != nil {
@@ -1395,6 +1436,9 @@ func (c *Controller) deletePolicy(lbID, listenerID, policyName string) (*lObject
 }
 
 func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
+	if inspect.Name == "" || inspect.Namespace == "" {
+		return nil
+	}
 	var listSecgroups []*lObjects.Secgroup
 	listSecgroups, err := vngcloudutil.ListSecurityGroups(c.vServerSC, c.getProjectID())
 	if err != nil {

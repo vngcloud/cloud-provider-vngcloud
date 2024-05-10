@@ -118,12 +118,13 @@ func NewServiceConfig(pService *lCoreV1.Service) *ServiceConfig {
 		HealthcheckPort:            0,
 		Tags:                       map[string]string{},
 		TargetNodeLabels:           map[string]string{},
-		IsAutoCreateSecurityGroup:  true,
+		IsAutoCreateSecurityGroup:  false,
 		SecurityGroups:             []string{},
 	}
 	if pService == nil {
 		return opt
 	}
+	opt.IsAutoCreateSecurityGroup = true
 	if option, ok := pService.Annotations[ServiceAnnotationLoadBalancerName]; ok {
 		opt.LoadBalancerName = option
 	}

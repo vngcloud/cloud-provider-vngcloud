@@ -88,7 +88,8 @@ func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string
 			return false, err
 		}
 
-		if strings.ToUpper(lb.Status) == consts.ACTIVE_LOADBALANCER_STATUS {
+		if strings.ToUpper(lb.DisplayStatus) == consts.ACTIVE_LOADBALANCER_STATUS &&
+			strings.ToUpper(lb.ProgressStatus) == consts.CREATED_LOADBALANCER_STATUS {
 			klog.Infof("Load balancer %s is ready", lbID)
 			resultLb = lb
 			return true, nil
