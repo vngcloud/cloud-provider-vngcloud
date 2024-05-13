@@ -45,7 +45,7 @@ jobs:
           context: .
           push: true
           build-args: |
-            - VERSION=${{ env.VERSION }}
+            VERSION=${{ env.VERSION }}
           platforms: linux/amd64
           outputs: type=registry
           tags: |
