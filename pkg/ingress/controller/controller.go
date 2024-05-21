@@ -1064,6 +1064,10 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 			klog.Errorf("error when create new lb: %v", err)
 			return "", err
 		}
+		err = c.ensureTags(lb.UUID, inspect.serviceConf.Tags)
+		if err != nil {
+			klog.Errorln("error when ensure tags", err)
+		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
@@ -1098,6 +1102,11 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *Expander) (*lObjects.LoadBalancer, error) {
 	var err error
 	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
+
+	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
+	if err != nil {
+		klog.Errorln("error when ensure tags", err)
+	}
 
 	curLBExpander, err := c.inspectCurrentLB(lbID)
 	if err != nil {
@@ -1193,10 +1202,6 @@ func (c *Controller) actionCompareIngress(lbID string, oldIngExpander, newIngExp
 	}
 
 	err = c.ensureSecurityGroups(oldIngExpander, newIngExpander)
-	if err != nil {
-		klog.Errorln("error when ensure security groups", err)
-	}
-	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}

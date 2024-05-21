@@ -273,7 +273,17 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		}
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationCertificateIDs]; ok {
-		opt.CertificateIDs = utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
+		arr := utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
+		// remove duplicate certificate IDs
+		mapCertIDs := make(map[string]bool)
+		result := []string{}
+		for _, certID := range arr {
+			if !mapCertIDs[certID] {
+				result = append(result, certID)
+				mapCertIDs[certID] = true
+			}
+		}
+		opt.CertificateIDs = result
 	}
 	return opt
 }

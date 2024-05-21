@@ -587,6 +587,10 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 			klog.Errorf("error when create new lb: %v", err)
 			return "", err
 		}
+		err = c.ensureTags(lb.UUID, inspect.serviceConf.Tags)
+		if err != nil {
+			klog.Errorln("error when ensure tags", err)
+		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
@@ -664,6 +668,11 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 	var err error
 	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
 
+	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
+	if err != nil {
+		klog.Errorln("error when ensure tags", err)
+	}
+
 	// ensure all from newIngExpander
 	mapPoolNameIndex := make(map[string]int)
 	for poolIndex, ipool := range newIngExpander.PoolExpander {
@@ -699,10 +708,6 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 	}
 
 	err = c.ensureSecurityGroups(oldIngExpander, newIngExpander)
-	if err != nil {
-		klog.Errorln("error when ensure security groups", err)
-	}
-	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}
