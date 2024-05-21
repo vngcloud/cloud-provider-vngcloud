@@ -101,8 +101,8 @@ func DeletePool(client *client.ServiceClient, projectID string, lbID, poolID str
 
 	var err error
 	for {
-		err = pool.Delete(client, opt)
-		if err != nil && IsLoadBalancerNotReady(err) {
+		errSdk := pool.Delete(client, opt)
+		if errSdk != nil && IsLoadBalancerNotReady(errSdk.Error) {
 			klog.V(5).Infof("LoadBalancerNotReady, retry after 5 seconds")
 			time.Sleep(5 * time.Second)
 			continue

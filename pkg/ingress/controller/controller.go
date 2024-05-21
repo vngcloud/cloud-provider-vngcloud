@@ -958,8 +958,12 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 			return nil, vErrors.ErrNoCertificateFound
 		} else {
 			listenerHttpsOpts := serviceConf.CreateListenerOptions(true)
-			listenerHttpsOpts.CertificateAuthorities = &(serviceConf.CertificateIDs)
 			listenerHttpsOpts.DefaultCertificateAuthority = &(serviceConf.CertificateIDs[0])
+			if len(serviceConf.CertificateIDs) > 1 {
+				listenerHttpsOpts.CertificateAuthorities = PointerOf[[]string](serviceConf.CertificateIDs[1:])
+			} else {
+				listenerHttpsOpts.CertificateAuthorities = PointerOf[[]string]([]string{})
+			}
 			listenerHttpsOpts.ClientCertificate = PointerOf[string]("")
 			ingressInspect.ListenerExpander = append(ingressInspect.ListenerExpander, &utils.ListenerExpander{
 				CreateOpts: *listenerHttpsOpts,

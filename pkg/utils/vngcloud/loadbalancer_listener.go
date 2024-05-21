@@ -46,8 +46,8 @@ func DeleteListener(client *client.ServiceClient, projectID string, lbID, listen
 
 	var err error
 	for {
-		err = listener.Delete(client, opt)
-		if err != nil && IsLoadBalancerNotReady(err) {
+		errSdk := listener.Delete(client, opt)
+		if errSdk != nil && IsLoadBalancerNotReady(errSdk.Error) {
 			klog.V(5).Infof("LoadBalancerNotReady, retry after 5 seconds")
 			time.Sleep(5 * time.Second)
 			continue
