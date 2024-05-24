@@ -458,6 +458,13 @@ func (c *Controller) processItem(event Event) {
 }
 
 func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
+	if option, ok := ing.Annotations[ServiceAnnotationIgnore]; ok {
+		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
+			klog.Infof("Ignore ensure for service %s/%s", ing.Namespace, ing.Name)
+			return nil
+		}
+	}
+
 	err := c.DeleteLoadbalancer(ing)
 	if err != nil {
 		return err
@@ -466,6 +473,13 @@ func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 }
 
 func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
+	if option, ok := ing.Annotations[ServiceAnnotationIgnore]; ok {
+		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
+			klog.Infof("Ignore ensure for service %s/%s", ing.Namespace, ing.Name)
+			return nil
+		}
+	}
+
 	lb, err := c.ensureCompareIngress(oldIng, ing)
 	if err != nil {
 		c.isReApplyNextTime = true
