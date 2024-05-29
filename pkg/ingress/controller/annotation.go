@@ -18,6 +18,8 @@ const (
 
 // Annotations
 const (
+	ServiceAnnotationIgnore = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/ignore"
+
 	// ServiceAnnotationSubnetID              = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/subnet-id"  // both annotation and cloud-config
 	// ServiceAnnotationNetworkID             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/network-id" // both annotation and cloud-config
 	// ServiceAnnotationOwnedListeners        = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/owned-listeners"
@@ -273,7 +275,17 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		}
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationCertificateIDs]; ok {
-		opt.CertificateIDs = utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
+		arr := utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
+		// remove duplicate certificate IDs
+		mapCertIDs := make(map[string]bool)
+		result := []string{}
+		for _, certID := range arr {
+			if !mapCertIDs[certID] {
+				result = append(result, certID)
+				mapCertIDs[certID] = true
+			}
+		}
+		opt.CertificateIDs = result
 	}
 	return opt
 }

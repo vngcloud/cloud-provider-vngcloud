@@ -251,6 +251,15 @@ func ParseIntAnnotation(s, annotation string, defaultValue int) int {
 	return i
 }
 
+func ParseBoolAnnotation(s, annotation string, defaultValue bool) bool {
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		klog.Warningf("Invalid annotation \"%s\" value, use default value = %t", annotation, defaultValue)
+		return defaultValue
+	}
+	return b
+}
+
 func ParseStringListAnnotation(s, annotation string) []string {
 	if s == "" {
 		return []string{}

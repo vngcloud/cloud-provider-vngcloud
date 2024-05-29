@@ -58,5 +58,8 @@ func CreateSecurityGroup(client *client.ServiceClient, projectID string, name st
 	opt.Name = name
 	opt.Description = description
 	resp, err := secgroup.Create(client, opt)
-	return resp, err
+	if err != nil {
+		return nil, err.Error
+	}
+	return resp, nil
 }

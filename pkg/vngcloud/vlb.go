@@ -180,6 +180,13 @@ func (c *vLB) ensureLoadBalancer(
 	pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) ( // params
 	rLb *lCoreV1.LoadBalancerStatus, rErr error) { // returns
 
+	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
+		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
+			klog.Infof("Ignore ensure for service %s/%s", pService.Namespace, pService.Name)
+			return nil, nil
+		}
+	}
+
 	// Patcher the service to prevent the service is updated by other controller
 	patcher := newServicePatcher(c.kubeClient, pService)
 	defer func() {
@@ -244,6 +251,13 @@ func (c *vLB) getProjectID() string {
 }
 
 func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
+		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
+			klog.Infof("Ignore ensure for service %s/%s", pService.Namespace, pService.Name)
+			return nil
+		}
+	}
+
 	lbID, err := c.GetLoadbalancerIDByService(pService)
 	if lbID == "" {
 		klog.Infof("Not found lbID to delete")
@@ -587,6 +601,10 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 			klog.Errorf("error when create new lb: %v", err)
 			return "", err
 		}
+		err = c.ensureTags(lb.UUID, inspect.serviceConf.Tags)
+		if err != nil {
+			klog.Errorln("error when ensure tags", err)
+		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
@@ -664,6 +682,11 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 	var err error
 	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
 
+	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
+	if err != nil {
+		klog.Errorln("error when ensure tags", err)
+	}
+
 	// ensure all from newIngExpander
 	mapPoolNameIndex := make(map[string]int)
 	for poolIndex, ipool := range newIngExpander.PoolExpander {
@@ -699,10 +722,6 @@ func (c *vLB) actionCompareIngress(lbID string, oldIngExpander, newIngExpander *
 	}
 
 	err = c.ensureSecurityGroups(oldIngExpander, newIngExpander)
-	if err != nil {
-		klog.Errorln("error when ensure security groups", err)
-	}
-	err = c.ensureTags(lbID, newIngExpander.serviceConf.Tags)
 	if err != nil {
 		klog.Errorln("error when ensure security groups", err)
 	}

@@ -234,9 +234,7 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		TimeoutConnection:           lisOptions.TimeoutConnection,
 		DefaultPoolId:               *lisOptions.DefaultPoolId,
 		DefaultCertificateAuthority: lisOptions.DefaultCertificateAuthority,
-		// Headers:                     lisOptions.Headers,
-		// ClientCertificate:           lisOptions.ClientCertificateAuthentication,
-		// ......................................... update later
+		CertificateAuthorities:      lisOptions.CertificateAuthorities,
 	}
 	if ilis.AllowedCidrs != lisOptions.AllowedCidrs ||
 		ilis.TimeoutClient != lisOptions.TimeoutClient ||
@@ -249,11 +247,33 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		klog.Infof("listener need update default pool id: %s", *lisOptions.DefaultPoolId)
 		isNeedUpdate = true
 	}
-	if lisOptions.DefaultCertificateAuthority != nil && (ilis.DefaultCertificateAuthority == nil || *(ilis.DefaultCertificateAuthority) != *(lisOptions.DefaultCertificateAuthority)) {
+	if lisOptions.DefaultCertificateAuthority != nil &&
+		(ilis.DefaultCertificateAuthority == nil || *(ilis.DefaultCertificateAuthority) != *(lisOptions.DefaultCertificateAuthority)) {
 		klog.Infof("listener need update default certificate authority: %s", *lisOptions.DefaultCertificateAuthority)
 		isNeedUpdate = true
 	}
-	// update cert SNI here .......................................................
+
+	if len(ilis.CertificateAuthorities) > 0 && lisOptions.CertificateAuthorities == nil {
+		isNeedUpdate = true
+	} else if lisOptions.CertificateAuthorities != nil {
+		if len(ilis.CertificateAuthorities) != len(*lisOptions.CertificateAuthorities) {
+			klog.Infof("listener need update certificate authorities")
+			isNeedUpdate = true
+		} else {
+			maps := make(map[string]bool)
+			for _, ca := range ilis.CertificateAuthorities {
+				maps[ca] = true
+			}
+			for _, ca := range *lisOptions.CertificateAuthorities {
+				if _, ok := maps[ca]; !ok {
+					klog.Infof("listener need update certificate authorities")
+					isNeedUpdate = true
+					break
+				}
+			}
+		}
+	}
+
 	if !isNeedUpdate {
 		return nil
 	}

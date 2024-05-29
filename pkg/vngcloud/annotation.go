@@ -17,6 +17,8 @@ const (
 
 // Annotations
 const (
+	ServiceAnnotationIgnore = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/ignore"
+
 	// ServiceAnnotationSubnetID              = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/subnet-id"  // both annotation and cloud-config
 	// ServiceAnnotationNetworkID             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/network-id" // both annotation and cloud-config
 	// ServiceAnnotationOwnedListeners        = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/owned-listeners"
