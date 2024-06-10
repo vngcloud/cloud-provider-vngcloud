@@ -1,3 +1,13 @@
+push-base-repo:
+	docker pull golang:1.22.4
+	docker tag golang:1.22.4 vcr.vngcloud.vn/81-vks-public/golang:1.22.4
+	docker push vcr.vngcloud.vn/81-vks-public/golang:1.22.4
+	docker image rm golang:1.22.4 vcr.vngcloud.vn/81-vks-public/golang:1.22.4
+
+	docker pull registry.k8s.io/build-image/go-runner:v2.3.1-go1.22.4-bookworm.0
+	docker tag registry.k8s.io/build-image/go-runner:v2.3.1-go1.22.4-bookworm.0 vcr.vngcloud.vn/81-vks-public/go-runner:v2.3.1-go1.22.4-bookworm.0
+	docker push vcr.vngcloud.vn/81-vks-public/go-runner:v2.3.1-go1.22.4-bookworm.0
+	docker image rm registry.k8s.io/build-image/go-runner:v2.3.1-go1.22.4-bookworm.0 vcr.vngcloud.vn/81-vks-public/go-runner:v2.3.1-go1.22.4-bookworm.0
 # golang-client Makefile
 # Follows the interface defined in the Golang CTI proposed
 # in https://review.openstack.org/410355
@@ -137,9 +147,11 @@ push-multiarch-image-%:
 		--platform $(shell echo $(addprefix linux/,$(ARCHS)) | sed 's/ /,/g') \
 		--target $* \
 		.
+	
+	$(CONTAINER_ENGINE) image push $(REGISTRY)/$*:$(VERSION)
 
 # Push all multiarch images
-push-multiarch-images: $(addprefix push-multiarch-image-,$(IMAGE_NAMES))
+push-multiarch-images: clean build $(addprefix push-multiarch-image-,$(IMAGE_NAMES))
 
 version:
 	@echo ${VERSION}
