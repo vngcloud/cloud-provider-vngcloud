@@ -535,7 +535,8 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 
 	// Ensure pools and listener for this loadbalancer
 	for _, port := range pService.Spec.Ports {
-		poolName := utils.GenListenerAndPoolName(c.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
+		poolName := serviceConf.GenPoolName(c.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
+		listenerName := serviceConf.GenListenerName(c.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
 
 		monitorPort := int(port.NodePort)
 		if serviceConf.HealthcheckPort != 0 {
@@ -577,7 +578,7 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		}
 
 		listenerOptions := serviceConf.CreateListenerOptions(port)
-		listenerOptions.ListenerName = poolName
+		listenerOptions.ListenerName = listenerName
 
 		ingressInspect.PoolExpander = append(ingressInspect.PoolExpander, &utils.PoolExpander{
 			UUID:       "",

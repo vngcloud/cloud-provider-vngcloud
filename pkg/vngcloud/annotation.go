@@ -1,13 +1,13 @@
 package vngcloud
 
 import (
+	"fmt"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
 	apiv1 "k8s.io/api/core/v1"
-	lCoreV1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 )
 
@@ -44,6 +44,7 @@ const (
 
 	// // Pool annotations
 	ServiceAnnotationPoolAlgorithm   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/pool-algorithm" // both annotation and cloud-config
+	ServiceAnnotationProxyProtocol   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-proxy-protocol"
 	ServiceAnnotationHealthcheckPort = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/healthcheck-port"
 	// ServiceAnnotationEnableStickySession = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-sticky-session"
 	// ServiceAnnotationEnableTLSEncryption = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-tls-encryption"
@@ -93,9 +94,10 @@ type ServiceConfig struct {
 	TargetNodeLabels           map[string]string
 	IsAutoCreateSecurityGroup  bool
 	SecurityGroups             []string
+	EnableProxyProtocol        []string
 }
 
-func NewServiceConfig(pService *lCoreV1.Service) *ServiceConfig {
+func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
 	opt := &ServiceConfig{
 		LoadBalancerID:             "",
 		LoadBalancerName:           "",
@@ -122,6 +124,7 @@ func NewServiceConfig(pService *lCoreV1.Service) *ServiceConfig {
 		TargetNodeLabels:           map[string]string{},
 		IsAutoCreateSecurityGroup:  false,
 		SecurityGroups:             []string{},
+		EnableProxyProtocol:        []string{},
 	}
 	if pService == nil {
 		return opt
@@ -248,6 +251,9 @@ func NewServiceConfig(pService *lCoreV1.Service) *ServiceConfig {
 	if port, ok := pService.Annotations[ServiceAnnotationHealthcheckPort]; ok {
 		opt.HealthcheckPort = utils.ParseIntAnnotation(port, ServiceAnnotationHealthcheckPort, opt.HealthcheckPort)
 	}
+	if proxy, ok := pService.Annotations[ServiceAnnotationProxyProtocol]; ok {
+		opt.EnableProxyProtocol = utils.ParseStringListAnnotation(proxy, ServiceAnnotationProxyProtocol)
+	}
 	return opt
 }
 
@@ -304,12 +310,55 @@ func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateO
 	}
 	opt := &pool.CreateOpts{
 		PoolName:      "",
-		PoolProtocol:  utils.ParsePoolProtocol(pPort.Protocol),
+		PoolProtocol:  utils.ParsePoolProtocol(s.MappingProtocol(pPort)),
 		Stickiness:    nil,
 		TLSEncryption: nil,
 		HealthMonitor: healthMonitor,
 		Algorithm:     s.PoolAlgorithm,
 		Members:       []*pool.Member{},
 	}
+	for _, name := range s.EnableProxyProtocol {
+		if name == pPort.Name && pPort.Protocol == apiv1.ProtocolTCP {
+			opt.PoolProtocol = pool.CreateOptsProtocolOptProxy
+			break
+		}
+	}
 	return opt
+}
+
+func (s *ServiceConfig) MappingProtocol(pPort apiv1.ServicePort) string {
+	for _, name := range s.EnableProxyProtocol {
+		if name == pPort.Name && pPort.Protocol == apiv1.ProtocolTCP {
+			return string(pool.CreateOptsProtocolOptProxy)
+		}
+	}
+	return string(pPort.Protocol)
+}
+
+func (s *ServiceConfig) GenListenerName(clusterName string, pService *apiv1.Service, resourceType string, pPort apiv1.ServicePort) string {
+	hash := utils.GenerateHashName(clusterName, pService.Namespace, pService.Name, resourceType)
+	name := fmt.Sprintf("%s_%s_%s_%s_%s_%s_%d",
+		consts.DEFAULT_LB_PREFIX_NAME,
+		utils.TrimString(clusterName, 10),
+		utils.TrimString(pService.Namespace, 10),
+		utils.TrimString(pService.Name, 10),
+		hash,
+		pPort.Protocol,
+		pPort.Port)
+	return utils.ValidateName(name)
+}
+
+func (s *ServiceConfig) GenPoolName(clusterName string, pService *apiv1.Service, resourceType string, pPort apiv1.ServicePort) string {
+	realProtocol := s.MappingProtocol(pPort)
+
+	hash := utils.GenerateHashName(clusterName, pService.Namespace, pService.Name, resourceType)
+	name := fmt.Sprintf("%s_%s_%s_%s_%s_%s_%d",
+		consts.DEFAULT_LB_PREFIX_NAME,
+		utils.TrimString(clusterName, 10),
+		utils.TrimString(pService.Namespace, 10),
+		utils.TrimString(pService.Name, 10),
+		hash,
+		realProtocol,
+		pPort.Port)
+	return utils.ValidateName(name)
 }
