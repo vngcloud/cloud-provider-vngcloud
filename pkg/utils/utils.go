@@ -122,7 +122,7 @@ func ParsePoolAlgorithm(pOpt string) lPoolV2.CreateOptsAlgorithmOpt {
 	return lPoolV2.CreateOptsAlgorithmOptRoundRobin
 }
 
-func ParsePoolProtocol(pPoolProtocol apiv1.Protocol) lPoolV2.CreateOptsProtocolOpt {
+func ParsePoolProtocol(pPoolProtocol string) lPoolV2.CreateOptsProtocolOpt {
 	opt := lStr.TrimSpace(lStr.ToUpper(string(pPoolProtocol)))
 	switch opt {
 	case string(lPoolV2.CreateOptsProtocolOptProxy):
