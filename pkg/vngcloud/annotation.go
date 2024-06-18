@@ -318,7 +318,7 @@ func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateO
 		Members:       []*pool.Member{},
 	}
 	for _, name := range s.EnableProxyProtocol {
-		if name == pPort.Name && pPort.Protocol == apiv1.ProtocolTCP {
+		if (name == "*" || name == pPort.Name) && pPort.Protocol == apiv1.ProtocolTCP {
 			opt.PoolProtocol = pool.CreateOptsProtocolOptProxy
 			break
 		}
@@ -328,7 +328,7 @@ func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateO
 
 func (s *ServiceConfig) MappingProtocol(pPort apiv1.ServicePort) string {
 	for _, name := range s.EnableProxyProtocol {
-		if name == pPort.Name && pPort.Protocol == apiv1.ProtocolTCP {
+		if (name == "*" || name == pPort.Name) && pPort.Protocol == apiv1.ProtocolTCP {
 			return string(pool.CreateOptsProtocolOptProxy)
 		}
 	}

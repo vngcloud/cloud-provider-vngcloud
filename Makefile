@@ -42,7 +42,7 @@ TAR_FILE	?= rootfs.tar
 
 GOOS		?= $(shell go env GOOS)
 GOPROXY		?= $(shell go env GOPROXY)
-VERSION     ?= v0.2.1
+VERSION     ?= v0.2.2
 GOARCH		:=
 GOFLAGS		:=
 TAGS		:=
