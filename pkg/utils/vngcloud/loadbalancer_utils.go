@@ -237,8 +237,8 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		CertificateAuthorities:      lisOptions.CertificateAuthorities,
 
 		// not support update these fields
-		Headers:           ilis.Headers,
-		ClientCertificate: ilis.ClientCertificateAuthentication,
+		Headers:           ilis.Headers, // L7: if this field is nil, it will update empty ? => set it nil in L4
+		ClientCertificate: nil,
 	}
 	if ilis.AllowedCidrs != lisOptions.AllowedCidrs ||
 		ilis.TimeoutClient != lisOptions.TimeoutClient ||

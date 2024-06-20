@@ -870,6 +870,7 @@ func (c *vLB) ensureListenerV2(lbID, lisName string, listenerOpts listener.Creat
 
 	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)
 	if updateOpts != nil {
+		updateOpts.Headers = nil
 		err := vngcloudutil.UpdateListener(c.vLBSC, c.getProjectID(), lbID, lis.UUID, updateOpts)
 		if err != nil {
 			klog.Error("error when update listener: ", err)
