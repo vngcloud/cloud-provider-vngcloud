@@ -883,21 +883,17 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		klog.Errorf("All node are not in a same subnet: %v", retErr)
 		return nil, retErr
 	}
-	if option, ok := ing.Annotations[ServiceAnnotationInboundCIDRs]; ok {
-		ingressInspect.AllowCIDR = option
-	} else {
-		networkID := vngcloudutil.GetNetworkID(servers, subnetID)
-		if networkID == "" {
-			klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
-			return nil, vErrors.ErrNetworkIDNotFound
-		}
-		subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetID)
-		if err != nil {
-			klog.Errorf("Failed to get subnet: %v", err)
-			return nil, err
-		}
-		ingressInspect.AllowCIDR = subnet.CIDR
+	networkID := vngcloudutil.GetNetworkID(servers, subnetID)
+	if networkID == "" {
+		klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
+		return nil, vErrors.ErrNetworkIDNotFound
 	}
+	subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetID)
+	if err != nil {
+		klog.Errorf("Failed to get subnet: %v", err)
+		return nil, err
+	}
+	ingressInspect.SubnetCIDR = subnet.CIDR
 	ingressInspect.LbOptions.SubnetID = subnetID
 	ingressInspect.InstanceIDs = providerIDs
 
@@ -1502,7 +1498,7 @@ func (c *Controller) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 
 			for _, rule := range inspect.SecGroupRuleExpander {
 				rule.CreateOpts.SecurityGroupID = defaultSecgroup.UUID
-				rule.CreateOpts.RemoteIPPrefix = inspect.AllowCIDR
+				rule.CreateOpts.RemoteIPPrefix = inspect.SubnetCIDR
 			}
 
 			needDelete, needCreate := vngcloudutil.CompareSecgroupRule(secgroupRules, inspect.SecGroupRuleExpander)

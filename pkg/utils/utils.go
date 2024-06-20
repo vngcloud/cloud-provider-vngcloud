@@ -275,6 +275,10 @@ func ParseStringListAnnotation(s, annotation string) []string {
 	return validStr
 }
 
+func StringListToString(s []string) string {
+	return strings.Join(s, ",")
+}
+
 func ParseStringMapAnnotation(s, annotation string) map[string]string {
 	if s == "" {
 		return map[string]string{}

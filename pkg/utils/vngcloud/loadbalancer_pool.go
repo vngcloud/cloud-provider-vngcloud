@@ -10,7 +10,7 @@ import (
 )
 
 func CreatePool(client *client.ServiceClient, projectID string, lbID string, opt *pool.CreateOpts) (*lObjects.Pool, error) {
-	klog.V(5).Infoln("[API] CreatePool: ", "lbID: ", lbID)
+	klog.V(5).Infoln("[API] CreatePool: ", "lbID: ", lbID, "opt: ", opt)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 
@@ -42,7 +42,7 @@ func ListPoolOfLB(client *client.ServiceClient, projectID string, lbID string) (
 }
 
 func UpdatePoolMember(client *client.ServiceClient, projectID string, lbID, poolID string, mems []*pool.Member) error {
-	klog.V(5).Infoln("[API] UpdatePoolMember: ", "poolID: ", poolID)
+	klog.V(5).Infoln("[API] UpdatePoolMember: ", "poolID: ", poolID, "mems: ", mems)
 	for _, mem := range mems {
 		klog.V(5).Infof("[%s, %s, %d, %d]", mem.Name, mem.IpAddress, mem.Port, mem.MonitorPort)
 	}

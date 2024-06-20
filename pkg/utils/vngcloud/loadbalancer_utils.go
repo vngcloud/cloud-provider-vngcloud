@@ -235,6 +235,10 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		DefaultPoolId:               *lisOptions.DefaultPoolId,
 		DefaultCertificateAuthority: lisOptions.DefaultCertificateAuthority,
 		CertificateAuthorities:      lisOptions.CertificateAuthorities,
+
+		// not support update these fields
+		Headers:           ilis.Headers,
+		ClientCertificate: ilis.ClientCertificateAuthentication,
 	}
 	if ilis.AllowedCidrs != lisOptions.AllowedCidrs ||
 		ilis.TimeoutClient != lisOptions.TimeoutClient ||

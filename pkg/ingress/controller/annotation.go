@@ -42,7 +42,7 @@ const (
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
 	ServiceAnnotationIdleTimeoutMember     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-member"     // both annotation and cloud-config
 	ServiceAnnotationIdleTimeoutConnection = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-connection" // both annotation and cloud-config
-	ServiceAnnotationInboundCIDRs          = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/inbound-cidrs"           // call only 1 time .......................
+	ServiceAnnotationInboundCIDRs          = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/inbound-cidrs"
 
 	// Pool annotations
 	ServiceAnnotationPoolAlgorithm       = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/pool-algorithm" // both annotation and cloud-config
@@ -78,7 +78,7 @@ type IngressConfig struct {
 	IdleTimeoutClient          int
 	IdleTimeoutMember          int
 	IdleTimeoutConnection      int
-	InboundCIDRs               string
+	InboundCIDRs               []string
 	HealthcheckProtocol        pool.CreateOptsHealthCheckProtocolOpt
 	HealthcheckHttpMethod      pool.CreateOptsHealthCheckMethodOpt
 	HealthcheckPath            string
@@ -110,7 +110,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		IdleTimeoutClient:          50,
 		IdleTimeoutMember:          50,
 		IdleTimeoutConnection:      5,
-		InboundCIDRs:               "0.0.0.0/0",
+		InboundCIDRs:               []string{"0.0.0.0/0"},
 		HealthcheckProtocol:        pool.CreateOptsHealthCheckProtocolOptTCP,
 		HealthcheckHttpMethod:      pool.CreateOptsHealthCheckMethodOptGET,
 		HealthcheckPath:            "/",
@@ -162,7 +162,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		opt.IdleTimeoutConnection = utils.ParseIntAnnotation(option, ServiceAnnotationIdleTimeoutConnection, opt.IdleTimeoutConnection)
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationInboundCIDRs]; ok {
-		opt.InboundCIDRs = option
+		opt.InboundCIDRs = utils.ParseStringListAnnotation(option, ServiceAnnotationInboundCIDRs)
 	}
 
 	if option, ok := pService.Annotations[ServiceAnnotationHealthcheckProtocol]; ok {
@@ -313,7 +313,7 @@ func (s *IngressConfig) CreateListenerOptions(isHTTPS bool) *listener.CreateOpts
 		TimeoutClient:               s.IdleTimeoutClient,
 		TimeoutMember:               s.IdleTimeoutMember,
 		TimeoutConnection:           s.IdleTimeoutConnection,
-		AllowedCidrs:                s.InboundCIDRs,
+		AllowedCidrs:                utils.StringListToString(s.InboundCIDRs),
 	}
 	if isHTTPS {
 		opt.ListenerName = consts.DEFAULT_HTTPS_LISTENER_NAME

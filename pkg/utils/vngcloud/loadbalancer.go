@@ -45,7 +45,7 @@ func GetLB(client *client.ServiceClient, projectID string, lbID string) (*object
 }
 
 func CreateLB(client *client.ServiceClient, projectID string, lbOptions *loadbalancer.CreateOpts) (*objects.LoadBalancer, error) {
-	klog.V(5).Infoln("[API] CreateLB: ", "name: ", lbOptions.Name, "packageID: ", lbOptions.PackageID, "scheme: ", lbOptions.Scheme, "subnetID: ", lbOptions.SubnetID, "type: ", lbOptions.Type)
+	klog.V(5).Infoln("[API] CreateLB: ", "lbOptions: ", lbOptions)
 	lbOptions.ProjectID = projectID
 
 	resp, err := loadbalancer.Create(client, lbOptions)

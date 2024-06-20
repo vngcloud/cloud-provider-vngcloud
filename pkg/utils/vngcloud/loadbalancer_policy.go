@@ -10,7 +10,7 @@ import (
 )
 
 func CreatePolicy(client *client.ServiceClient, projectID string, lbID, listenerID string, opt *policy.CreateOptsBuilder) (*lObjects.Policy, error) {
-	klog.V(5).Infoln("[API] CreatePolicy: ", "lbID: ", lbID, "listenerID: ", listenerID)
+	klog.V(5).Infoln("[API] CreatePolicy: ", "lbID: ", lbID, "listenerID: ", listenerID, "opt: ", opt)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 	opt.ListenerID = listenerID
@@ -55,7 +55,7 @@ func GetPolicy(client *client.ServiceClient, projectID string, lbID, listenerID,
 }
 
 func UpdatePolicy(client *client.ServiceClient, projectID string, lbID, listenerID, policyID string, opt *policy.UpdateOptsBuilder) error {
-	klog.V(5).Infoln("[API] UpdatePolicy: ", "lbID: ", lbID, "listenerID: ", listenerID, "policyID: ", policyID)
+	klog.V(5).Infoln("[API] UpdatePolicy: ", "lbID: ", lbID, "listenerID: ", listenerID, "policyID: ", policyID, "opt: ", opt)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 	opt.ListenerID = listenerID
