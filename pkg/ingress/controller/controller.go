@@ -684,6 +684,9 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 		}
 	}
 
+	// LB should active before delete
+	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
+
 	canDeleteAllLB := func(lbID string) bool {
 		getPool, err := vngcloudutil.ListPoolOfLB(c.vLBSC, c.getProjectID(), lbID)
 		if err != nil {
@@ -1086,7 +1089,7 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
 
-	lb, err := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	if err != nil {
 		klog.Errorf("error when get lb: %v", err)
 		return inspect.serviceConf.LoadBalancerID, err
@@ -1098,12 +1101,12 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 		}
 		if lb.PackageID != inspect.LbOptions.PackageID {
 			klog.Info("Resize load-balancer package to: ", inspect.LbOptions.PackageID)
-			err := vngcloudutil.ResizeLB(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerName, inspect.LbOptions.PackageID)
+			err := vngcloudutil.ResizeLB(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID, inspect.LbOptions.PackageID)
 			if err != nil {
 				klog.Errorf("error when resize lb: %v", err)
 				return
 			}
-			vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerName)
+			vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 		}
 		if lb.Internal != (inspect.LbOptions.Scheme == loadbalancer.CreateOptsSchemeOptInternal) {
 			klog.Warning("Load balancer scheme not match, must delete and recreate")

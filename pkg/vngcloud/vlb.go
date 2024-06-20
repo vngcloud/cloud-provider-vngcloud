@@ -320,6 +320,9 @@ func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string,
 		}
 	}
 
+	// LB should active before delete
+	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
+
 	canDeleteAllLB := func(lbID string) bool {
 		getPool, err := vngcloudutil.ListPoolOfLB(c.vLBSC, c.getProjectID(), lbID)
 		if err != nil {
@@ -610,7 +613,7 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
 
-	lb, err := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	if err != nil {
 		klog.Errorf("error when get lb: %v", err)
 		return inspect.serviceConf.LoadBalancerID, err

@@ -16,11 +16,11 @@ func ImportCertificate(client *client.ServiceClient, projectID string, opt *cert
 }
 
 func ListCertificate(client *client.ServiceClient, projectID string) ([]*lObjects.Certificate, error) {
-	// klog.V(5).Infoln("[API] ListCertificate: ")
+	klog.V(5).Infoln("[API] ListCertificate: ")
 	opt := &certificates.ListOpts{}
 	opt.ProjectID = projectID
 	resp, err := certificates.List(client, opt)
-	// klog.V(5).Infoln("[API] ListCertificate: ", "resp: ", resp, "err: ", err)
+	klog.V(5).Infoln("[API] ListCertificate: ", "resp: ", resp, "err: ", err)
 	return resp, err
 }
 
