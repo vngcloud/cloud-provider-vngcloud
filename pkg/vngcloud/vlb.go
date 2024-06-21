@@ -453,7 +453,6 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 				PolicyExpander:       make([]*utils.PolicyExpander, 0),
 				PoolExpander:         make([]*utils.PoolExpander, 0),
 				ListenerExpander:     make([]*utils.ListenerExpander, 0),
-				SecurityGroups:       make([]string, 0),
 				SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
 			},
 		}, nil
@@ -479,7 +478,6 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		PolicyExpander:       make([]*utils.PolicyExpander, 0),
 		PoolExpander:         make([]*utils.PoolExpander, 0),
 		ListenerExpander:     make([]*utils.ListenerExpander, 0),
-		SecurityGroups:       make([]string, 0),
 		InstanceIDs:          make([]string, 0),
 		SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
 	}
@@ -963,15 +961,15 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			}
 		}
 		ensureDefaultSecgroupRule()
-		inspect.SecurityGroups = []string{defaultSecgroup.UUID}
+		inspect.serviceConf.SecurityGroups = append(inspect.serviceConf.SecurityGroups, defaultSecgroup.UUID)
 	}
-	if len(inspect.SecurityGroups) < 1 || len(inspect.InstanceIDs) < 1 {
+	if len(inspect.serviceConf.SecurityGroups) < 1 || len(inspect.InstanceIDs) < 1 {
 		return nil
 	}
 
 	// add default security group to old inspect
 	if oldInspect != nil && oldInspect.serviceConf.IsAutoCreateSecurityGroup && defaultSecgroup != nil {
-		oldInspect.SecurityGroups = append(oldInspect.SecurityGroups, defaultSecgroup.UUID)
+		oldInspect.serviceConf.SecurityGroups = append(oldInspect.serviceConf.SecurityGroups, defaultSecgroup.UUID)
 	}
 
 	listSecgroups, err = vngcloudutil.ListSecurityGroups(c.vServerSC, c.getProjectID())
@@ -986,7 +984,7 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 	for _, secgroup := range listSecgroups {
 		mapSecgroups[secgroup.UUID] = true
 	}
-	for _, secgroup := range inspect.SecurityGroups {
+	for _, secgroup := range inspect.serviceConf.SecurityGroups {
 		if _, isHave := mapSecgroups[secgroup]; !isHave {
 			klog.Errorf("security group not found: %v", secgroup)
 		} else {
@@ -1015,7 +1013,7 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 		return err
 	}
 	for _, instanceID := range inspect.InstanceIDs {
-		err := ensureSecGroupsForInstance(instanceID, oldInspect.SecurityGroups, validSecgroups)
+		err := ensureSecGroupsForInstance(instanceID, oldInspect.serviceConf.SecurityGroups, validSecgroups)
 		if err != nil {
 			klog.Errorln("error when ensure security groups for instance", err)
 		}
