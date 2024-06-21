@@ -55,6 +55,7 @@ const (
 	CreateEvent EventType = "CREATE"
 	UpdateEvent EventType = "UPDATE"
 	DeleteEvent EventType = "DELETE"
+	SyncEvent   EventType = "SYNC"
 )
 
 // Event holds the context of an event
@@ -378,14 +379,9 @@ func (c *Controller) nodeSyncLoop() {
 		if !IsValid(&ing) {
 			continue
 		}
-
-		logrus.WithFields(logrus.Fields{"ingress": ing.Name, "namespace": ing.Namespace}).Debug("Starting to handle ingress")
-		err := c.ensureIngress(nil, &ing)
-		if err != nil {
-			logrus.WithFields(logrus.Fields{"ingress": ing.Name, "namespace": ing.Namespace}).Error("Failed to handle ingress:", err)
-			c.recorder.Event(&ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to sync vngcloud resources for ingress %s: %v", fmt.Sprintf("%s/%s", ing.Namespace, ing.Name), err))
-			continue
-		}
+		copyIng := ing.DeepCopy()
+		logrus.WithFields(logrus.Fields{"ingress": copyIng.Name, "namespace": copyIng.Namespace}).Debug("Starting to sync ingress")
+		c.queue.AddRateLimited(Event{Obj: copyIng, Type: SyncEvent, oldObj: nil})
 	}
 	c.knownNodes = readyWorkerNodes
 	klog.Info("Finished to handle node change.")
@@ -452,7 +448,17 @@ func (c *Controller) processItem(event Event) {
 		} else {
 			c.recorder.Event(ing, apiv1.EventTypeNormal, "Deleted", fmt.Sprintf("Ingress %s", key))
 		}
+	case SyncEvent:
+		logger.Info("sync ingress")
+
+		if err := c.ensureIngress(oldIng, ing); err != nil {
+			utilruntime.HandleError(fmt.Errorf("failed to sync vngcloud resources for ingress %s: %v", key, err))
+			c.recorder.Event(ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to sync vngcloud resources for ingress %s: %v", key, err))
+		} else {
+			c.recorder.Event(ing, apiv1.EventTypeNormal, "Synced", fmt.Sprintf("Ingress %s", key))
+		}
 	}
+
 	klog.Infoln("----- DONE -----")
 	// return nil
 }
