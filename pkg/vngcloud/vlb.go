@@ -60,24 +60,26 @@ type (
 	vLB struct {
 		vLBSC     *lClient.ServiceClient
 		vServerSC *lClient.ServiceClient
+		extraInfo *vngcloudutil.ExtraInfo
 
 		kubeClient    kubernetes.Interface
 		eventRecorder record.EventRecorder
 		vLbConfig     VLbOpts
-		extraInfo     *vngcloudutil.ExtraInfo
-		trackLBUpdate *utils.UpdateTracker
 		serviceCache  map[string]*lCoreV1.Service
 
+		knownNodes          []*lCoreV1.Node
 		serviceLister       corelisters.ServiceLister
 		serviceListerSynced cache.InformerSynced
 		nodeLister          corelisters.NodeLister
 		nodeListerSynced    cache.InformerSynced
 		stopCh              chan struct{}
 		informer            informers.SharedInformerFactory
+		config              *Config
+
+		isReApplyNextTime   bool
+		trackLBUpdate       *utils.UpdateTracker
 		mu                  sync.Mutex
 		numOfUpdatingThread int
-		config              *Config
-		isReApplyNextTime   bool
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -412,14 +414,18 @@ func (c *vLB) nodeSyncLoop() {
 		}
 	}
 
-	if !isReApply {
-		return
-	}
-
 	readyWorkerNodes, err := utils.ListNodeWithPredicate(c.nodeLister, make(map[string]string, 0))
 	if err != nil {
 		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
 		c.isReApplyNextTime = true
+		return
+	}
+	if !isReApply && !utils.NodeSlicesEqual(readyWorkerNodes, c.knownNodes) {
+		isReApply = true
+		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
+	}
+
+	if !isReApply {
 		return
 	}
 
@@ -435,6 +441,7 @@ func (c *vLB) nodeSyncLoop() {
 			klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
 		}
 	}
+	c.knownNodes = readyWorkerNodes
 }
 
 func (c *vLB) getClusterName() string {
