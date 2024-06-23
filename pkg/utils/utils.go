@@ -327,7 +327,7 @@ func getNodeConditionPredicate(node *apiv1.Node) bool {
 	}
 
 	// Deprecated in favor of LabelNodeExcludeLB, kept for consistency and will be removed later
-	if _, hasNodeRoleMasterLabel := node.Labels[consts.LabelNodeExcludeLB]; hasNodeRoleMasterLabel {
+	if _, hasNodeRoleMasterLabel := node.Labels[consts.DEFAULT_K8S_MASTER_LABEL]; hasNodeRoleMasterLabel {
 		return false
 	}
 
@@ -335,15 +335,15 @@ func getNodeConditionPredicate(node *apiv1.Node) bool {
 	if len(node.Status.Conditions) == 0 {
 		return false
 	}
-	for _, cond := range node.Status.Conditions {
-		// We consider the node for load balancing only when its NodeReady condition status
-		// is ConditionTrue
-		if cond.Type == apiv1.NodeReady && cond.Status != apiv1.ConditionTrue {
-			klog.Info("ignoring node:", "name", node.Name, "status", cond.Status)
-			// log.WithFields(log.Fields{"name": node.Name, "status": cond.Status}).Info("ignoring node")
-			return false
-		}
-	}
+	// for _, cond := range node.Status.Conditions {
+	// 	// We consider the node for load balancing only when its NodeReady condition status
+	// 	// is ConditionTrue
+	// 	if cond.Type == apiv1.NodeReady && cond.Status != apiv1.ConditionTrue {
+	// 		klog.Info("ignoring node:", "name", node.Name, "status", cond.Status)
+	// 		// log.WithFields(log.Fields{"name": node.Name, "status": cond.Status}).Info("ignoring node")
+	// 		return false
+	// 	}
+	// }
 	return true
 }
 func ListServiceWithPredicate(serviceLister corelisters.ServiceLister) ([]*apiv1.Service, error) {
