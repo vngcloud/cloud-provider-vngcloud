@@ -9,7 +9,7 @@ import (
 )
 
 func CreateListener(client *client.ServiceClient, projectID string, lbID string, opt *listener.CreateOpts) (*lObjects.Listener, error) {
-	klog.V(5).Infoln("[API] CreateListener: ", "lbID: ", lbID, opt.ListenerName, opt.DefaultPoolId, opt.ListenerProtocol, opt.AllowedCidrs, opt.ListenerProtocolPort, opt.TimeoutClient, opt.TimeoutConnection, opt.TimeoutMember, opt.CertificateAuthorities, opt.ClientCertificate, opt.DefaultCertificateAuthority)
+	klog.V(5).Infoln("[API] CreateListener: ", "lbID: ", lbID, "opt: ", opt)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 
@@ -60,8 +60,7 @@ func DeleteListener(client *client.ServiceClient, projectID string, lbID, listen
 }
 
 func UpdateListener(client *client.ServiceClient, projectID string, lbID, listenerID string, opt *listener.UpdateOpts) error {
-	klog.V(5).Infoln("[API] UpdateListener: ", "lbID: ", lbID, "listenerID: ", listenerID)
-	klog.V(5).Infoln("[API] UpdateListener: ", "opt: ", opt)
+	klog.V(5).Infoln("[API] UpdateListener: ", "lbID: ", lbID, "listenerID: ", listenerID, "opt: ", opt)
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 	opt.ListenerID = listenerID

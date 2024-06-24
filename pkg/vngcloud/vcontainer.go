@@ -61,16 +61,17 @@ func (s *VContainer) LoadBalancer() (lcloudProvider.LoadBalancer, bool) {
 		s.provider, "vserver-gateway")
 
 	lb := &vLB{
-		vLBSC:         vlb,
-		vServerSC:     vserver,
-		kubeClient:    s.kubeClient,
-		eventRecorder: s.eventRecorder,
-		extraInfo:     s.extraInfo,
-		vLbConfig:     s.vLbOpts,
-		config:        s.config,
-		trackLBUpdate: utils.NewUpdateTracker(),
-		serviceCache:  make(map[string]*lCoreV1.Service),
+		vLBSC:             vlb,
+		vServerSC:         vserver,
+		kubeClient:        s.kubeClient,
+		eventRecorder:     s.eventRecorder,
+		extraInfo:         s.extraInfo,
+		vLbConfig:         s.vLbOpts,
+		config:            s.config,
+		trackLBUpdate:     utils.NewUpdateTracker(),
+		serviceCache:      make(map[string]*lCoreV1.Service),
 		isReApplyNextTime: false,
+		knownNodes:        []*lCoreV1.Node{},
 	}
 	go lb.Init()
 	s.vlb = lb

@@ -10,13 +10,13 @@ import (
 )
 
 func ListLBBySubnetID(client *client.ServiceClient, projectID string, subnetID string) ([]*objects.LoadBalancer, error) {
-	// klog.V(5).Infoln("[API] ListLBBySubnetID: ", "subnetID: ", subnetID)
+	klog.V(5).Infoln("[API] ListLBBySubnetID: ", "subnetID: ", subnetID)
 	opt := &loadbalancer.ListBySubnetIDOpts{}
 	opt.ProjectID = projectID
 	opt.SubnetID = subnetID
 
 	resp, err := loadbalancer.ListBySubnetID(client, opt)
-	// klog.V(5).Infoln("[API] ListLBBySubnetID: ", "resp: ", resp, "err: ", err)
+	klog.V(5).Infoln("[API] ListLBBySubnetID: ", "resp: ", resp, "err: ", err)
 	return resp, err
 }
 
@@ -31,13 +31,13 @@ func ListLB(client *client.ServiceClient, projectID string) ([]*objects.LoadBala
 }
 
 func GetLB(client *client.ServiceClient, projectID string, lbID string) (*objects.LoadBalancer, error) {
-	// klog.V(5).Infoln("[API] GetLB: ", "lbID: ", lbID)
+	klog.V(5).Infoln("[API] GetLB: ", "lbID: ", lbID)
 	opt := &loadbalancer.GetOpts{}
 	opt.ProjectID = projectID
 	opt.LoadBalancerID = lbID
 
 	resp, err := loadbalancer.Get(client, opt)
-	// klog.V(5).Infoln("[API] GetLB: ", "resp: ", resp, "err: ", err)
+	klog.V(5).Infoln("[API] GetLB: ", "resp: ", resp, "err: ", err)
 	if err != nil {
 		return resp, err.Error
 	}
@@ -45,7 +45,7 @@ func GetLB(client *client.ServiceClient, projectID string, lbID string) (*object
 }
 
 func CreateLB(client *client.ServiceClient, projectID string, lbOptions *loadbalancer.CreateOpts) (*objects.LoadBalancer, error) {
-	klog.V(5).Infoln("[API] CreateLB: ", "name: ", lbOptions.Name, "packageID: ", lbOptions.PackageID, "scheme: ", lbOptions.Scheme, "subnetID: ", lbOptions.SubnetID, "type: ", lbOptions.Type)
+	klog.V(5).Infoln("[API] CreateLB: ", "lbOptions: ", lbOptions)
 	lbOptions.ProjectID = projectID
 
 	resp, err := loadbalancer.Create(client, lbOptions)

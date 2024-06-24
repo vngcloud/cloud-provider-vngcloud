@@ -53,12 +53,11 @@ type IngressInspect struct {
 	Name        string
 	Namespace   string
 	LbOptions   *loadbalancer.CreateOpts // create options for lb
-	AllowCIDR   string
+	SubnetCIDR  string
 
 	PolicyExpander       []*PolicyExpander
 	PoolExpander         []*PoolExpander
 	ListenerExpander     []*ListenerExpander
-	SecurityGroups       []string
 	InstanceIDs          []string
 	SecGroupRuleExpander []*SecGroupRuleExpander
 }

@@ -60,24 +60,26 @@ type (
 	vLB struct {
 		vLBSC     *lClient.ServiceClient
 		vServerSC *lClient.ServiceClient
+		extraInfo *vngcloudutil.ExtraInfo
 
 		kubeClient    kubernetes.Interface
 		eventRecorder record.EventRecorder
 		vLbConfig     VLbOpts
-		extraInfo     *vngcloudutil.ExtraInfo
-		trackLBUpdate *utils.UpdateTracker
 		serviceCache  map[string]*lCoreV1.Service
 
+		knownNodes          []*lCoreV1.Node
 		serviceLister       corelisters.ServiceLister
 		serviceListerSynced cache.InformerSynced
 		nodeLister          corelisters.NodeLister
 		nodeListerSynced    cache.InformerSynced
 		stopCh              chan struct{}
 		informer            informers.SharedInformerFactory
+		config              *Config
+
+		isReApplyNextTime   bool
+		trackLBUpdate       *utils.UpdateTracker
 		mu                  sync.Mutex
 		numOfUpdatingThread int
-		config              *Config
-		isReApplyNextTime   bool
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -320,6 +322,9 @@ func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string,
 		}
 	}
 
+	// LB should active before delete
+	vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), lbID)
+
 	canDeleteAllLB := func(lbID string) bool {
 		getPool, err := vngcloudutil.ListPoolOfLB(c.vLBSC, c.getProjectID(), lbID)
 		if err != nil {
@@ -409,14 +414,18 @@ func (c *vLB) nodeSyncLoop() {
 		}
 	}
 
-	if !isReApply {
-		return
-	}
-
 	readyWorkerNodes, err := utils.ListNodeWithPredicate(c.nodeLister, make(map[string]string, 0))
 	if err != nil {
 		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
 		c.isReApplyNextTime = true
+		return
+	}
+	if !isReApply && !utils.NodeSlicesEqual(readyWorkerNodes, c.knownNodes) {
+		isReApply = true
+		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
+	}
+
+	if !isReApply {
 		return
 	}
 
@@ -432,6 +441,7 @@ func (c *vLB) nodeSyncLoop() {
 			klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
 		}
 	}
+	c.knownNodes = readyWorkerNodes
 }
 
 func (c *vLB) getClusterName() string {
@@ -450,7 +460,6 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 				PolicyExpander:       make([]*utils.PolicyExpander, 0),
 				PoolExpander:         make([]*utils.PoolExpander, 0),
 				ListenerExpander:     make([]*utils.ListenerExpander, 0),
-				SecurityGroups:       make([]string, 0),
 				SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
 			},
 		}, nil
@@ -476,7 +485,6 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		PolicyExpander:       make([]*utils.PolicyExpander, 0),
 		PoolExpander:         make([]*utils.PoolExpander, 0),
 		ListenerExpander:     make([]*utils.ListenerExpander, 0),
-		SecurityGroups:       make([]string, 0),
 		InstanceIDs:          make([]string, 0),
 		SecGroupRuleExpander: make([]*utils.SecGroupRuleExpander, 0),
 	}
@@ -515,21 +523,17 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		plog.Errorf("All node are not in a same subnet: %v", retErr)
 		return nil, retErr
 	}
-	if option, ok := pService.Annotations[ServiceAnnotationInboundCIDRs]; ok {
-		ingressInspect.AllowCIDR = option
-	} else {
-		networkID := vngcloudutil.GetNetworkID(servers, subnetID)
-		if networkID == "" {
-			klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
-			return nil, vErrors.ErrNetworkIDNotFound
-		}
-		subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetID)
-		if err != nil {
-			klog.Errorf("Failed to get subnet: %v", err)
-			return nil, err
-		}
-		ingressInspect.AllowCIDR = subnet.CIDR
+	networkID := vngcloudutil.GetNetworkID(servers, subnetID)
+	if networkID == "" {
+		klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
+		return nil, vErrors.ErrNetworkIDNotFound
 	}
+	subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetID)
+	if err != nil {
+		klog.Errorf("Failed to get subnet: %v", err)
+		return nil, err
+	}
+	ingressInspect.SubnetCIDR = subnet.CIDR
 	ingressInspect.LbOptions.SubnetID = subnetID
 	ingressInspect.InstanceIDs = providerIDs
 
@@ -610,7 +614,7 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	}
 
-	lb, err := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 	if err != nil {
 		klog.Errorf("error when get lb: %v", err)
 		return inspect.serviceConf.LoadBalancerID, err
@@ -871,6 +875,7 @@ func (c *vLB) ensureListenerV2(lbID, lisName string, listenerOpts listener.Creat
 
 	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)
 	if updateOpts != nil {
+		updateOpts.Headers = nil
 		err := vngcloudutil.UpdateListener(c.vLBSC, c.getProjectID(), lbID, lis.UUID, updateOpts)
 		if err != nil {
 			klog.Error("error when update listener: ", err)
@@ -943,7 +948,7 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 
 			for _, rule := range inspect.SecGroupRuleExpander {
 				rule.CreateOpts.SecurityGroupID = defaultSecgroup.UUID
-				rule.CreateOpts.RemoteIPPrefix = inspect.AllowCIDR
+				rule.CreateOpts.RemoteIPPrefix = inspect.SubnetCIDR
 			}
 
 			needDelete, needCreate := vngcloudutil.CompareSecgroupRule(secgroupRules, inspect.SecGroupRuleExpander)
@@ -963,15 +968,15 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 			}
 		}
 		ensureDefaultSecgroupRule()
-		inspect.SecurityGroups = []string{defaultSecgroup.UUID}
+		inspect.serviceConf.SecurityGroups = append(inspect.serviceConf.SecurityGroups, defaultSecgroup.UUID)
 	}
-	if len(inspect.SecurityGroups) < 1 || len(inspect.InstanceIDs) < 1 {
+	if len(inspect.serviceConf.SecurityGroups) < 1 || len(inspect.InstanceIDs) < 1 {
 		return nil
 	}
 
 	// add default security group to old inspect
 	if oldInspect != nil && oldInspect.serviceConf.IsAutoCreateSecurityGroup && defaultSecgroup != nil {
-		oldInspect.SecurityGroups = append(oldInspect.SecurityGroups, defaultSecgroup.UUID)
+		oldInspect.serviceConf.SecurityGroups = append(oldInspect.serviceConf.SecurityGroups, defaultSecgroup.UUID)
 	}
 
 	listSecgroups, err = vngcloudutil.ListSecurityGroups(c.vServerSC, c.getProjectID())
@@ -986,7 +991,7 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 	for _, secgroup := range listSecgroups {
 		mapSecgroups[secgroup.UUID] = true
 	}
-	for _, secgroup := range inspect.SecurityGroups {
+	for _, secgroup := range inspect.serviceConf.SecurityGroups {
 		if _, isHave := mapSecgroups[secgroup]; !isHave {
 			klog.Errorf("security group not found: %v", secgroup)
 		} else {
@@ -1015,7 +1020,7 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 		return err
 	}
 	for _, instanceID := range inspect.InstanceIDs {
-		err := ensureSecGroupsForInstance(instanceID, oldInspect.SecurityGroups, validSecgroups)
+		err := ensureSecGroupsForInstance(instanceID, oldInspect.serviceConf.SecurityGroups, validSecgroups)
 		if err != nil {
 			klog.Errorln("error when ensure security groups for instance", err)
 		}

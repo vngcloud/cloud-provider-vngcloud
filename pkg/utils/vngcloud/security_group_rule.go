@@ -11,7 +11,7 @@ import (
 )
 
 func CreateSecurityGroupRule(client *client.ServiceClient, projectID, secgroupID string, opts *secgroup_rule.CreateOpts) (*objects.SecgroupRule, error) {
-	klog.V(5).Infoln("[API] CreateSecurityGroupRule: ", "secgroupID: ", secgroupID)
+	klog.V(5).Infoln("[API] CreateSecurityGroupRule: ", "secgroupID: ", secgroupID, "opts: ", opts)
 	opt := secgroup_rule.NewCreateOpts(projectID, secgroupID, opts)
 	resp, err := secgroup_rule.Create(client, opt)
 	return resp, err

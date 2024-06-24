@@ -72,7 +72,7 @@ func FindListenerByPort(client *client.ServiceClient, projectID string, lbID str
 	return nil, errors.ErrNotFound
 }
 
-func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string) {
+func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string) (*lObjects.LoadBalancer, error) {
 	klog.Infof("Waiting for load balancer %s to be ready", lbID)
 	var resultLb *lObjects.LoadBalancer
 
@@ -109,7 +109,7 @@ func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string
 		klog.Errorf("timeout waiting for the loadbalancer %s with lb status %s", lbID, resultLb.Status)
 	}
 
-	// return resultLb, err
+	return resultLb, err
 }
 
 func ComparePoolOptions(ipool *lObjects.Pool, poolOptions *pool.CreateOpts) *pool.UpdateOpts {
@@ -235,6 +235,10 @@ func CompareListenerOptions(ilis *lObjects.Listener, lisOptions *listener.Create
 		DefaultPoolId:               *lisOptions.DefaultPoolId,
 		DefaultCertificateAuthority: lisOptions.DefaultCertificateAuthority,
 		CertificateAuthorities:      lisOptions.CertificateAuthorities,
+
+		// not support update these fields
+		Headers:           ilis.Headers, // L7: if this field is nil, it will update empty ? => set it nil in L4
+		ClientCertificate: nil,
 	}
 	if ilis.AllowedCidrs != lisOptions.AllowedCidrs ||
 		ilis.TimeoutClient != lisOptions.TimeoutClient ||
