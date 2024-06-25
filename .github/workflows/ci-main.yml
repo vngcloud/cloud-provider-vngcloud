@@ -5,7 +5,7 @@ on:
     branches: ["main"]
 
 env:
-  VERSION: v0.2.3
+  VERSION: v0.2.4
   REPO: vcr.vngcloud.vn/81-vks-public
 
 jobs:
