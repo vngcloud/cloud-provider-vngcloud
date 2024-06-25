@@ -117,6 +117,7 @@ func (c *vLB) Init() {
 		return
 	}
 
+	time.Sleep(60 * time.Second)
 	go wait.Until(c.nodeSyncLoop, 60*time.Second, c.stopCh)
 	<-c.stopCh
 }
@@ -876,6 +877,10 @@ func (c *vLB) ensureListenerV2(lbID, lisName string, listenerOpts listener.Creat
 	updateOpts := vngcloudutil.CompareListenerOptions(lis, &listenerOpts)
 	if updateOpts != nil {
 		updateOpts.Headers = nil
+		updateOpts.ClientCertificate = nil
+		updateOpts.DefaultCertificateAuthority = nil
+		updateOpts.CertificateAuthorities = nil
+
 		err := vngcloudutil.UpdateListener(c.vLBSC, c.getProjectID(), lbID, lis.UUID, updateOpts)
 		if err != nil {
 			klog.Error("error when update listener: ", err)
