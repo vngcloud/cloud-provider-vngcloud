@@ -1,11 +1,10 @@
 name: CI Dev
 
 on:
-  push:
-    branches: ["dev"]
+  push
 
 env:
-  VERSION: v0.2.4
+  VERSION: v0.2.0
   REPO: vcr.vngcloud.vn/60108-annd2-ingress
 
 jobs:
