@@ -70,8 +70,6 @@ type (
 		knownNodes          []*lCoreV1.Node
 		serviceLister       corelisters.ServiceLister
 		serviceListerSynced cache.InformerSynced
-		nodeLister          corelisters.NodeLister
-		nodeListerSynced    cache.InformerSynced
 		stopCh              chan struct{}
 		informer            informers.SharedInformerFactory
 		config              *Config
@@ -80,6 +78,8 @@ type (
 		trackLBUpdate       *utils.UpdateTracker
 		mu                  sync.Mutex
 		numOfUpdatingThread int
+
+		stringKeyLock *utils.StringKeyLock
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -98,21 +98,19 @@ type (
 func (c *vLB) Init() {
 	kubeInformerFactory := informers.NewSharedInformerFactory(c.kubeClient, time.Second*30)
 	serviceInformer := kubeInformerFactory.Core().V1().Services()
-	nodeInformer := kubeInformerFactory.Core().V1().Nodes()
 
-	c.nodeLister = nodeInformer.Lister()
-	c.nodeListerSynced = nodeInformer.Informer().HasSynced
 	c.serviceLister = serviceInformer.Lister()
 	c.serviceListerSynced = serviceInformer.Informer().HasSynced
 	c.stopCh = make(chan struct{})
 	c.informer = kubeInformerFactory
 	c.numOfUpdatingThread = 0
+	c.stringKeyLock = utils.NewStringKeyLock()
 
 	defer close(c.stopCh)
 	go c.informer.Start(c.stopCh)
 
 	// wait for the caches to synchronize before starting the worker
-	if !cache.WaitForCacheSync(c.stopCh, c.serviceListerSynced, c.nodeListerSynced) {
+	if !cache.WaitForCacheSync(c.stopCh, c.serviceListerSynced) {
 		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
 		return
 	}
@@ -135,8 +133,11 @@ func (c *vLB) GetLoadBalancerName(_ context.Context, clusterName string, pServic
 	return utils.GenerateLBName(c.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
 }
 
-func (c *vLB) EnsureLoadBalancer(
-	pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*lCoreV1.LoadBalancerStatus, error) {
+func (c *vLB) EnsureLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*lCoreV1.LoadBalancerStatus, error) {
+	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
+	c.stringKeyLock.Lock(key)
+	defer c.stringKeyLock.Unlock(key)
+	c.knownNodes = pNodes
 	c.addUpdatingThread()
 	defer c.removeUpdatingThread()
 	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
@@ -151,6 +152,10 @@ func (c *vLB) EnsureLoadBalancer(
 // UpdateLoadBalancer updates hosts under the specified load balancer. This will be executed when user add or remove nodes
 // from the cluster
 func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) error {
+	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
+	c.stringKeyLock.Lock(key)
+	defer c.stringKeyLock.Unlock(key)
+	c.knownNodes = pNodes
 	nodeNames := make([]string, 0, len(pNodes))
 	for _, node := range pNodes {
 		nodeNames = append(nodeNames, node.Name)
@@ -169,6 +174,9 @@ func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pServ
 }
 
 func (c *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
+	c.stringKeyLock.Lock(key)
+	defer c.stringKeyLock.Unlock(key)
 	c.addUpdatingThread()
 	defer c.removeUpdatingThread()
 	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
@@ -197,11 +205,11 @@ func (c *vLB) ensureLoadBalancer(
 	}()
 
 	serviceKey := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
-	oldIngExpander, _ := c.inspectService(nil)
+	oldIngExpander, _ := c.inspectService(nil, pNodes)
 	if oldService, ok := c.serviceCache[serviceKey]; ok {
-		oldIngExpander, _ = c.inspectService(oldService)
+		oldIngExpander, _ = c.inspectService(oldService, pNodes)
 	}
-	newIngExpander, err := c.inspectService(pService)
+	newIngExpander, err := c.inspectService(pService, pNodes)
 	if err != nil {
 		klog.Errorln("error when inspect new ingress:", err)
 		return nil, err
@@ -272,11 +280,11 @@ func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string,
 		return err
 	}
 
-	oldIngExpander, err := c.inspectService(pService)
+	oldIngExpander, err := c.inspectService(pService, c.knownNodes)
 	if err != nil {
-		oldIngExpander, _ = c.inspectService(nil)
+		oldIngExpander, _ = c.inspectService(nil, c.knownNodes)
 	}
-	newIngExpander, err := c.inspectService(nil)
+	newIngExpander, err := c.inspectService(nil, c.knownNodes)
 	if err != nil {
 		klog.Errorln("error when inspect new service:", err)
 		return err
@@ -415,17 +423,6 @@ func (c *vLB) nodeSyncLoop() {
 		}
 	}
 
-	readyWorkerNodes, err := utils.ListNodeWithPredicate(c.nodeLister, make(map[string]string, 0))
-	if err != nil {
-		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
-		c.isReApplyNextTime = true
-		return
-	}
-	if !isReApply && !utils.NodeSlicesEqual(readyWorkerNodes, c.knownNodes) {
-		isReApply = true
-		logrus.Infof("Detected change in list of current cluster nodes. Node set: %v", utils.NodeNames(readyWorkerNodes))
-	}
-
 	if !isReApply {
 		return
 	}
@@ -438,11 +435,10 @@ func (c *vLB) nodeSyncLoop() {
 	}
 
 	for _, service := range services {
-		if _, err := c.EnsureLoadBalancer(context.Background(), c.getClusterName(), service, readyWorkerNodes); err != nil {
+		if _, err := c.EnsureLoadBalancer(context.Background(), c.getClusterName(), service, c.knownNodes); err != nil {
 			klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
 		}
 	}
-	c.knownNodes = readyWorkerNodes
 }
 
 func (c *vLB) getClusterName() string {
@@ -452,7 +448,7 @@ func (c *vLB) getClusterID() string {
 	return c.config.Cluster.ClusterID
 }
 
-func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
+func (c *vLB) inspectService(pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*Expander, error) {
 	if pService == nil {
 		return &Expander{
 			serviceConf: NewServiceConfig(nil),
@@ -494,19 +490,10 @@ func (c *vLB) inspectService(pService *lCoreV1.Service) (*Expander, error) {
 		ingressInspect.LbOptions.Name = serviceConf.LoadBalancerName
 	}
 
-	nodeObjs, err := utils.ListNodeWithPredicate(c.nodeLister, serviceConf.TargetNodeLabels)
-	if len(nodeObjs) < 1 {
-		logrus.Errorf("No nodes found in the cluster")
-		return nil, vErrors.ErrNoNodeAvailable
-	}
-	if err != nil {
-		plog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
-		return nil, err
-	}
-	membersAddr := utils.GetNodeMembersAddr(nodeObjs)
+	membersAddr := utils.GetNodeMembersAddr(pNodes)
 
 	// get subnetID of this ingress
-	providerIDs := utils.GetListProviderID(nodeObjs)
+	providerIDs := utils.GetListProviderID(pNodes)
 	if len(providerIDs) < 1 {
 		plog.Errorf("No nodes found in the cluster")
 		return nil, vErrors.ErrNoNodeAvailable
