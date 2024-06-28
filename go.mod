@@ -11,7 +11,7 @@ require (
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.18.2
-	github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240620170114-c685b9ed20d0
+	github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240628025259-5f41d3d163b4
 	gopkg.in/gcfg.v1 v1.2.3
 	k8s.io/api v0.29.0
 	k8s.io/apimachinery v0.29.0

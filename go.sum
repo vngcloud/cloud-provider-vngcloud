@@ -233,6 +233,8 @@ github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240521072621-df4ad46f8a9b h1:WUU
 github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240521072621-df4ad46f8a9b/go.mod h1:3ZjgN6oq5o7sYrShj2dOPOBF3cqWk6IW+/0VVpJWYf4=
 github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240620170114-c685b9ed20d0 h1:OcWJ4GewAZsvfDExNp5RUYjJUBaA0KZ9neEx4rnGsEk=
 github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240620170114-c685b9ed20d0/go.mod h1:3ZjgN6oq5o7sYrShj2dOPOBF3cqWk6IW+/0VVpJWYf4=
+github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240628025259-5f41d3d163b4 h1:FdNMbxG4j8hpBQmSgn/Y8JEnWP4oml74VCVaLhStfJI=
+github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240628025259-5f41d3d163b4/go.mod h1:3ZjgN6oq5o7sYrShj2dOPOBF3cqWk6IW+/0VVpJWYf4=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 h1:eY9dn8+vbi4tKz5Qo6v2eYzo7kUS51QINcR5jNpbZS8=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2/go.mod h1:UETIi67q53MR2AWcXfiuqkDkRtnGDLqkBTpCHuJHxtU=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
