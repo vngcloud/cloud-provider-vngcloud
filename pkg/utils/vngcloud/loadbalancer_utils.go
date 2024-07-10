@@ -1,7 +1,6 @@
 package vngcloud
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
@@ -97,7 +96,7 @@ func WaitForLBActive(client *client.ServiceClient, projectID string, lbID string
 		if strings.ToUpper(lb.Status) == consts.ERROR_LOADBALANCER_STATUS {
 			klog.Errorf("Load balancer %s is error", lbID)
 			resultLb = lb
-			return true, fmt.Errorf("load balancer %s is error", lbID)
+			return true, errors.ErrLoadBalancerStatusError
 		}
 
 		klog.Infof("Load balancer %s is not ready yet, waiting...", lbID)

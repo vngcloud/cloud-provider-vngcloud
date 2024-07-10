@@ -188,7 +188,7 @@ func (c *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string
 // ************************************************** PRIVATE METHODS **************************************************
 
 func (c *vLB) ensureLoadBalancer(
-	pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) ( // params
+	pCtx context.Context, _ string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) ( // params
 	rLb *lCoreV1.LoadBalancerStatus, rErr error) { // returns
 
 	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
@@ -221,6 +221,14 @@ func (c *vLB) ensureLoadBalancer(
 	}
 	lbID, err = c.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
+		if err == vErrors.ErrLoadBalancerStatusError {
+			klog.Infof("Load balancer %s is error, delete and create later", lbID)
+			if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lbID); errr != nil {
+				klog.Errorln("error when delete lb", err)
+				return nil, errr
+			}
+			return nil, err
+		}
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
 	}
@@ -261,7 +269,7 @@ func (c *vLB) getProjectID() string {
 	return c.extraInfo.ProjectID
 }
 
-func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *lCoreV1.Service) error {
 	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
 			klog.Infof("Ignore ensure for service %s/%s", pService.Namespace, pService.Name)
@@ -367,7 +375,7 @@ func (c *vLB) ensureDeleteLoadBalancer(pCtx context.Context, clusterName string,
 	return nil
 }
 
-func (c *vLB) ensureGetLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
+func (c *vLB) ensureGetLoadBalancer(_ context.Context, _ string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
 	lbID, _ := c.GetLoadbalancerIDByService(pService)
 	if lbID == "" {
 		klog.Infof("Load balancer is not existed")

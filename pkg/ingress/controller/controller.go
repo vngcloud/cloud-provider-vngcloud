@@ -1061,6 +1061,14 @@ func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.
 	}
 	lbID, err = c.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
+		if err == vErrors.ErrLoadBalancerStatusError {
+			klog.Infof("Load balancer %s is error, delete and create later", lbID)
+			if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lbID); errr != nil {
+				klog.Errorln("error when delete lb", err)
+				return nil, errr
+			}
+			return nil, err
+		}
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
 	}
