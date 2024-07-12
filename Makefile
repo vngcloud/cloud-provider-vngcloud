@@ -46,7 +46,7 @@ VERSION     ?= v0.2.0
 GOARCH		:=
 GOFLAGS		:=
 TAGS		:=
-LDFLAGS		:= "-w -s -X 'k8s.io/component-base/version.gitVersion=$(VERSION)' -X 'github.com/vngcloud/vngcloud-controller-manager/pkg/version.Version=$(VERSION)'"
+LDFLAGS		:= "-w -s -X 'k8s.io/component-base/version.gitVersion=$(VERSION)' -X 'github.com/vngcloud/cloud-provider-vngcloud/pkg/version.Version=$(VERSION)'"
 GOX_LDFLAGS	:= $(shell echo "$(LDFLAGS) -extldflags \"-static\"")
 REGISTRY	?= vcr.vngcloud.vn/81-vks-public
 IMAGE_OS	?= linux
