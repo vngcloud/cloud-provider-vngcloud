@@ -61,7 +61,8 @@ COPY pkg/ pkg/
 RUN make build GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOPROXY=${GOPROXY} VERSION=${VERSION}
 # COPY vngcloud-controller-manager ./vngcloud-controller-manager
 # COPY vngcloud-ingress-controller ./vngcloud-ingress-controller
-# RUN chmod +x ./vngcloud-controller-manager ./vngcloud-ingress-controller
+# COPY vngcloud-cm-webhook ./vngcloud-cm-webhook
+# RUN chmod +x ./vngcloud-controller-manager ./vngcloud-ingress-controller ./vngcloud-cm-webhook
 
 
 ################################################################################
@@ -103,3 +104,21 @@ LABEL name="vngcloud-ingress-controller" \
       help="none"
 
 CMD ["/bin/vngcloud-ingress-controller"]
+
+##
+## vngcloud-cm-webhook
+##
+FROM --platform=${TARGETPLATFORM} ${DISTROLESS_IMAGE} as vngcloud-cm-webhook
+
+COPY --from=builder /build/vngcloud-cm-webhook /bin/vngcloud-cm-webhook
+COPY --from=certs /etc/ssl/certs /etc/ssl/certs
+
+LABEL name="vngcloud-cm-webhook" \
+      license="Apache Version 2.0" \
+      maintainers="cuongdm3@vng.com.vn,annd2@vng.com.vn" \
+      description="Vngcloud ingress controller" \
+      distribution-scope="public" \
+      summary="Vngcloud ingress controller" \
+      help="none"
+
+CMD ["/bin/vngcloud-cm-webhook"]

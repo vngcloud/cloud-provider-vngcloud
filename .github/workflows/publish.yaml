@@ -19,6 +19,7 @@ jobs:
         include:
           - image: vngcloud-ingress-controller
           - image: vngcloud-controller-manager
+          - image: vngcloud-cm-webhook
     permissions:
       contents: write
       packages: write

@@ -42,7 +42,7 @@ TAR_FILE	?= rootfs.tar
 
 GOOS		?= $(shell go env GOOS)
 GOPROXY		?= $(shell go env GOPROXY)
-VERSION     ?= v0.2.4
+VERSION     ?= v0.2.0
 GOARCH		:=
 GOFLAGS		:=
 TAGS		:=
@@ -51,11 +51,13 @@ GOX_LDFLAGS	:= $(shell echo "$(LDFLAGS) -extldflags \"-static\"")
 REGISTRY	?= vcr.vngcloud.vn/81-vks-public
 IMAGE_OS	?= linux
 IMAGE_NAMES	?= vngcloud-controller-manager \
-				vngcloud-ingress-controller
+				vngcloud-ingress-controller \
+				vngcloud-cm-webhook
 ARCH		?= amd64
 ARCHS		?= amd64
 BUILD_CMDS	?= vngcloud-controller-manager \
-				vngcloud-ingress-controller
+				vngcloud-ingress-controller \
+				vngcloud-cm-webhook
 
 # CTI targets
 
@@ -164,6 +166,7 @@ ifndef HAS_GOX
 endif
 	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-controller-manager/
 	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-ingress-controller/
+	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-cm-webhook/
 
 .PHONY: dist
 dist: build-cross
