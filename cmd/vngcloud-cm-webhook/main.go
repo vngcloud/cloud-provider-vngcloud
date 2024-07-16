@@ -1,23 +1,39 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
+	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"os"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	"github.com/vngcloud/cloud-provider-vngcloud/cmd/vngcloud-cm-webhook/admission"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
+	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+)
+
+const (
+	TLS_PATH      = "/tmp/vngcloud-cm-webhook"
+	MUTATE_PATH   = "/mutate"
+	VALIDATE_PATH = "/validate"
+	HEALTH_PATH   = "/health"
+	PORT_HTTPS    = 8443
+	PORT_HTTP     = 8080
 )
 
 func PointerOf[T any](t T) *T {
@@ -30,21 +46,17 @@ var (
 
 	isCreateSecret       bool
 	isCreateWehookConfig bool
-	kubeconfig           string
-	secretName           string
 	namespace            string
 
 	debug bool
 )
 
 func init() {
-	flag.StringVar(&commonName, "common-name", "webhook-service.default.svc", "common name for the server certificate")
+	flag.StringVar(&commonName, "common-name", "", "common name for the server certificate")
 
-	flag.BoolVar(&isCreateSecret, "create-secret", false, "create secret")
+	flag.BoolVar(&isCreateSecret, "create-secret", true, "create secret")
 	flag.BoolVar(&isCreateWehookConfig, "create-webhook-config", true, "create webhook config")
-	flag.StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
-	flag.StringVar(&secretName, "secret-name", "webhook-server-tls", "secret name for the server certificate")
-	flag.StringVar(&namespace, "namespace", "default", "namespace as defined by pod.metadata.namespace")
+	flag.StringVar(&namespace, "namespace", "default", "namespace as defined by .metadata.namespace")
 
 	flag.BoolVar(&debug, "debug", true, "enable debug")
 
@@ -57,28 +69,28 @@ func init() {
 	}
 
 	// Generate server certificate and key
-	serverCert, serverKey, err := generateServerCertificate(caCert, caKey, commonName)
+	serverCert, serverKey, err := generateServerCertificate(caCert, caKey, commonName+"."+namespace+".svc")
 	if err != nil {
 		log.Fatalf("Error generating server certificate: %s", err)
 	}
 
 	if isCreateSecret {
 		// Build the Kubernetes client
-		clientset := buildClientset(kubeconfig)
+		clientset := buildClientset()
 
 		// Check if exist then delete
-		_, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), secretName, metav1.GetOptions{})
+		_, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), commonName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("Secret %s not found in namespace %s", secretName, namespace)
+			log.Printf("Secret %s not found in namespace %s", commonName, namespace)
 		} else {
-			err = clientset.CoreV1().Secrets(namespace).Delete(context.TODO(), secretName, metav1.DeleteOptions{})
+			err = clientset.CoreV1().Secrets(namespace).Delete(context.TODO(), commonName, metav1.DeleteOptions{})
 			if err != nil {
 				log.Fatalf("Error deleting secret: %s", err)
 			}
 		}
 
 		// Create Kubernetes secrets
-		err = createSecret(clientset, namespace, secretName, map[string][]byte{
+		err = createSecret(clientset, namespace, commonName, map[string][]byte{
 			"tls.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Raw}),
 			"tls.key": pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)}),
 			"ca.crt":  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
@@ -86,29 +98,29 @@ func init() {
 		if err != nil {
 			log.Fatalf("Error creating server TLS secret: %s", err)
 		}
-		log.Printf("Secret %s/%s created successfully\n", namespace, secretName)
+		log.Printf("Secret %s/%s created successfully\n", namespace, commonName)
 	}
 
 	log.Println("Certificates and secrets generated successfully")
 
-	if debug {
-		// // print certificates
-		// log.Println("CA Certificate:")
-		// log.Println(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw})))
-		// log.Println("Server Certificate:")
-		// log.Println(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Raw})))
-		// log.Println("Server Private Key:")
-		// log.Println(string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})))
-
-		// write certificates to files
-		writeToFile("ca.crt", "CERTIFICATE", caCert.Raw)
-		writeToFile("ca.key", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey))
-		writeToFile("server.crt", "CERTIFICATE", serverCert.Raw)
-		writeToFile("server.key", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(serverKey))
+	// Check if the folder exists
+	if _, err := os.Stat(TLS_PATH); os.IsNotExist(err) {
+		err := os.MkdirAll(TLS_PATH, os.ModePerm)
+		if err != nil {
+			fmt.Println("Error creating folder:", err)
+			return
+		}
+		fmt.Println("Folder created successfully.")
+	} else {
+		fmt.Println("Folder already exists.")
 	}
+	writeToFile(TLS_PATH+"/ca.crt", "CERTIFICATE", caCert.Raw)
+	writeToFile(TLS_PATH+"/ca.key", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey))
+	writeToFile(TLS_PATH+"/tls.crt", "CERTIFICATE", serverCert.Raw)
+	writeToFile(TLS_PATH+"/tls.key", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(serverKey))
 
 	if isCreateWehookConfig {
-		clientset := buildClientset(kubeconfig)
+		clientset := buildClientset()
 
 		// Check if exist then delete
 		_, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(context.TODO(), commonName, metav1.GetOptions{})
@@ -131,58 +143,60 @@ func init() {
 			}
 		}
 
-		mutateconfig := &admissionregistrationv1.MutatingWebhookConfiguration{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: commonName,
-			},
-			Webhooks: []admissionregistrationv1.MutatingWebhook{{
-				Name: commonName,
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					CABundle: caCert.Raw,
-					Service: &admissionregistrationv1.ServiceReference{
-						Name:      "vngcloud-controller-manager",
-						Namespace: namespace,
-						Path:      PointerOf("/mutate"),
-					},
-				},
-				Rules: []admissionregistrationv1.RuleWithOperations{{
-					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
-					Rule: admissionregistrationv1.Rule{
-						APIGroups:   []string{"apps"},
-						APIVersions: []string{"v1"},
-						Resources:   []string{"deployments"},
-					},
-				}},
-				FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
-				SideEffects:             PointerOf(admissionregistrationv1.SideEffectClassNone),
-				AdmissionReviewVersions: []string{"v1"},
-			}},
-		}
-		if _, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(context.TODO(), mutateconfig, metav1.CreateOptions{}); err != nil {
-			log.Fatalf("Error creating MutatingWebhookConfiguration: %s", err)
-		}
-		log.Printf("MutatingWebhookConfiguration %s created successfully\n", commonName)
+		// mutateconfig := &admissionregistrationv1.MutatingWebhookConfiguration{
+		// 	ObjectMeta: metav1.ObjectMeta{
+		// 		Name: commonName,
+		// 	},
+		// 	Webhooks: []admissionregistrationv1.MutatingWebhook{{
+		// 		Name: commonName + ".vngcloud.vn",
+		// 		ClientConfig: admissionregistrationv1.WebhookClientConfig{
+		// 			CABundle: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
+		// 			Service: &admissionregistrationv1.ServiceReference{
+		// 				Name:      commonName,
+		// 				Namespace: namespace,
+		// 				Path:      PointerOf(MUTATE_PATH),
+		// 				Port:      PointerOf(int32(PORT_HTTPS)),
+		// 			},
+		// 		},
+		// 		Rules: []admissionregistrationv1.RuleWithOperations{{
+		// 			Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
+		// 			Rule: admissionregistrationv1.Rule{
+		// 				APIGroups:   []string{""},
+		// 				APIVersions: []string{"v1"},
+		// 				Resources:   []string{"services"},
+		// 			},
+		// 		}},
+		// 		FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
+		// 		SideEffects:             PointerOf(admissionregistrationv1.SideEffectClassNone),
+		// 		AdmissionReviewVersions: []string{"v1"},
+		// 	}},
+		// }
+		// if _, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(context.TODO(), mutateconfig, metav1.CreateOptions{}); err != nil {
+		// 	log.Fatalf("Error creating MutatingWebhookConfiguration: %s", err)
+		// }
+		// log.Printf("MutatingWebhookConfiguration %s created successfully\n", commonName)
 
 		validateconfig := &admissionregistrationv1.ValidatingWebhookConfiguration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: commonName,
 			},
 			Webhooks: []admissionregistrationv1.ValidatingWebhook{{
-				Name: commonName,
+				Name: commonName + ".vngcloud.vn",
 				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					CABundle: caCert.Raw,
+					CABundle: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
 					Service: &admissionregistrationv1.ServiceReference{
-						Name:      "vngcloud-controller-manager",
+						Name:      commonName,
 						Namespace: namespace,
-						Path:      PointerOf("/validate"),
+						Path:      PointerOf(VALIDATE_PATH),
+						Port:      PointerOf(int32(PORT_HTTPS)),
 					},
 				},
 				Rules: []admissionregistrationv1.RuleWithOperations{{
 					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
 					Rule: admissionregistrationv1.Rule{
-						APIGroups:   []string{"apps"},
+						APIGroups:   []string{""},
 						APIVersions: []string{"v1"},
-						Resources:   []string{"deployments"},
+						Resources:   []string{"services"},
 					},
 				}},
 				FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
@@ -292,14 +306,10 @@ func writeToFile(filename, blockType string, data []byte) {
 	log.Printf("Written %s\n", filename)
 }
 
-// Build the Kubernetes client
-func buildClientset(cfg string) *kubernetes.Clientset {
-	config, err := clientcmd.BuildConfigFromFlags("", cfg)
-	if err != nil {
-		log.Fatalf("Error building kubeconfig: %s", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
+// Build the Kubernetes client should mount config in /etc/kubernetes/...
+func buildClientset() *kubernetes.Clientset {
+	// initialize k8s client
+	clientset, err := utils.CreateApiserverClient("", "")
 	if err != nil {
 		log.Fatalf("Error building kubernetes clientset: %s", err)
 	}
@@ -307,5 +317,155 @@ func buildClientset(cfg string) *kubernetes.Clientset {
 }
 
 func main() {
+	setLogger()
 
+	// handle our core application
+	http.HandleFunc(VALIDATE_PATH, ServeValidate)
+	http.HandleFunc(MUTATE_PATH, ServeMutate)
+	http.HandleFunc(HEALTH_PATH, ServeHealth)
+
+	// start the server
+	// listens to clear text http on port ... unless TLS env var is set to "true"
+	if os.Getenv("TLS") == "true" {
+		cert := TLS_PATH + "/tls.crt"
+		key := TLS_PATH + "/tls.key"
+		logrus.Printf("Listening on port %d ...", PORT_HTTPS)
+		logrus.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%d", PORT_HTTPS), cert, key, nil))
+	} else {
+		logrus.Printf("Listening on port %d ...", PORT_HTTP)
+		logrus.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", PORT_HTTP), nil))
+	}
+}
+
+// setLogger sets the logger using env vars, it defaults to text logs on
+// debug level unless otherwise specified
+func setLogger() {
+	logrus.SetLevel(logrus.DebugLevel)
+
+	lev := os.Getenv("LOG_LEVEL")
+	if lev != "" {
+		llev, err := logrus.ParseLevel(lev)
+		if err != nil {
+			logrus.Fatalf("cannot set LOG_LEVEL to %q", lev)
+		}
+		logrus.SetLevel(llev)
+	}
+
+	if os.Getenv("LOG_JSON") == "true" {
+		logrus.SetFormatter(&logrus.JSONFormatter{})
+	}
+}
+
+// ServeValidate validates an admission request and then writes an admission
+// review to `w`
+func ServeValidate(w http.ResponseWriter, r *http.Request) {
+	logger := logrus.WithField("uri", r.RequestURI)
+	logger.Debug("------------------------\nreceived validation request")
+
+	in, err := parseRequest(*r)
+	if err != nil {
+		logger.Error(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	adm := admission.Admitter{
+		Logger:  logger,
+		Request: in.Request,
+	}
+
+	out, err := adm.ValidateReview()
+	if err != nil {
+		e := fmt.Sprintf("could not generate admission response: %v", err)
+		logger.Error(e)
+		http.Error(w, e, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	jout, err := json.Marshal(out)
+	if err != nil {
+		e := fmt.Sprintf("could not parse admission response: %v", err)
+		logger.Error(e)
+		http.Error(w, e, http.StatusInternalServerError)
+		return
+	}
+
+	logger.Debug("sending response")
+	logger.Debugf("%s", jout)
+	fmt.Fprintf(w, "%s", jout)
+}
+
+// ServeMutate returns an admission review with mutations as a json patch
+// in the review response
+func ServeMutate(w http.ResponseWriter, r *http.Request) {
+	logger := logrus.WithField("uri", r.RequestURI)
+	logger.Debug("received mutation request")
+
+	in, err := parseRequest(*r)
+	if err != nil {
+		logger.Error(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	adm := admission.Admitter{
+		Logger:  logger,
+		Request: in.Request,
+	}
+
+	out, err := adm.MutateReview()
+	if err != nil {
+		e := fmt.Sprintf("could not generate admission response: %v", err)
+		logger.Error(e)
+		http.Error(w, e, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	jout, err := json.Marshal(out)
+	if err != nil {
+		e := fmt.Sprintf("could not parse admission response: %v", err)
+		logger.Error(e)
+		http.Error(w, e, http.StatusInternalServerError)
+		return
+	}
+
+	logger.Debug("sending response")
+	logger.Debugf("%s", jout)
+	fmt.Fprintf(w, "%s", jout)
+}
+
+// ServeHealth returns 200 when things are good
+func ServeHealth(w http.ResponseWriter, r *http.Request) {
+	logrus.WithField("uri", r.RequestURI).Debug("healthy")
+	fmt.Fprint(w, "OK")
+}
+
+// parseRequest extracts an AdmissionReview from an http.Request if possible
+func parseRequest(r http.Request) (*admissionv1.AdmissionReview, error) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		return nil, fmt.Errorf("Content-Type: %q should be %q",
+			r.Header.Get("Content-Type"), "application/json")
+	}
+
+	bodybuf := new(bytes.Buffer)
+	bodybuf.ReadFrom(r.Body)
+	body := bodybuf.Bytes()
+
+	if len(body) == 0 {
+		return nil, fmt.Errorf("admission request body is empty")
+	}
+
+	var a admissionv1.AdmissionReview
+
+	if err := json.Unmarshal(body, &a); err != nil {
+		return nil, fmt.Errorf("could not parse admission review request: %v", err)
+	}
+
+	if a.Request == nil {
+		return nil, fmt.Errorf("admission review can't be used: Request field is nil")
+	}
+
+	return &a, nil
 }
