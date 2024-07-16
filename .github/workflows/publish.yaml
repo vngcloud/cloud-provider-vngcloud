@@ -20,6 +20,7 @@ jobs:
           - image: vngcloud-ingress-controller
           - image: vngcloud-controller-manager
           - image: vngcloud-cm-webhook
+          - image: vngcloud-ic-webhook
     permissions:
       contents: write
       packages: write

@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/vngcloud/cloud-provider-vngcloud/cmd/vngcloud-cm-webhook/admission"
+	"github.com/vngcloud/cloud-provider-vngcloud/cmd/vngcloud-ic-webhook/admission"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	TLS_PATH      = "/tmp/vngcloud-cm-webhook"
+	TLS_PATH      = "/tmp/vngcloud-ic-webhook"
 	MUTATE_PATH   = "/mutate"
 	VALIDATE_PATH = "/validate"
 	HEALTH_PATH   = "/health"
@@ -151,9 +151,9 @@ func init() {
 				Rules: []admissionregistrationv1.RuleWithOperations{{
 					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
 					Rule: admissionregistrationv1.Rule{
-						APIGroups:   []string{""},
+						APIGroups:   []string{"networking.k8s.io"},
 						APIVersions: []string{"v1"},
-						Resources:   []string{"services"},
+						Resources:   []string{"ingresses"},
 					},
 				}},
 				FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
