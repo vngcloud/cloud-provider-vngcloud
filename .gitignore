@@ -25,4 +25,7 @@ TestResults.xml
 /vngcloud-controller-manager
 /vngcloud-ingress-controller
 /vngcloud-cm-webhook
+/vngcloud-ic-webhook
 .go
+*.crt
+*.key

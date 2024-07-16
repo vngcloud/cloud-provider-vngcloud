@@ -52,12 +52,14 @@ REGISTRY	?= vcr.vngcloud.vn/81-vks-public
 IMAGE_OS	?= linux
 IMAGE_NAMES	?= vngcloud-controller-manager \
 				vngcloud-ingress-controller \
-				vngcloud-cm-webhook
+				vngcloud-cm-webhook \
+				vngcloud-ic-webhook
 ARCH		?= amd64
 ARCHS		?= amd64
 BUILD_CMDS	?= vngcloud-controller-manager \
 				vngcloud-ingress-controller \
-				vngcloud-cm-webhook
+				vngcloud-cm-webhook \
+				vngcloud-ic-webhook
 
 # CTI targets
 
@@ -167,6 +169,7 @@ endif
 	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-controller-manager/
 	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-ingress-controller/
 	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-cm-webhook/
+	CGO_ENABLED=0 gox -parallel=$(GOX_PARALLEL) -output="_dist/{{.OS}}-{{.Arch}}/{{.Dir}}" -osarch='$(TARGETS)' $(GOFLAGS) $(if $(TAGS),-tags '$(TAGS)',) -ldflags '$(GOX_LDFLAGS)' $(GIT_HOST)/$(BASE_DIR)/cmd/vngcloud-ic-webhook/
 
 .PHONY: dist
 dist: build-cross
