@@ -2,7 +2,7 @@ package admission
 
 import (
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
+	admissionv1 "k8s.io/api/admission/v1"
 )
 
 // Validator is a container for mutation
@@ -17,7 +17,7 @@ func NewValidator(logger *logrus.Entry) *Validator {
 
 // itemValidators is an interface used to group functions mutating
 type itemValidator interface {
-	Validate(*corev1.Service) (validation, error)
+	Validate(*admissionv1.AdmissionRequest) (validation, error)
 	Name() string
 }
 
@@ -26,28 +26,17 @@ type validation struct {
 	Reason string
 }
 
-// Validate returns true if a service is valid
-func (v *Validator) Validate(service *corev1.Service) (validation, error) {
-	var serviceName string
-	if service.Name != "" {
-		serviceName = service.Name
-	} else {
-		if service.ObjectMeta.GenerateName != "" {
-			serviceName = service.ObjectMeta.GenerateName
-		}
-	}
-	log := logrus.WithField("service_name", serviceName)
-	log.Print("delete me")
-
-	// list of all validations to be applied to the service
+// Validate returns true if a item is valid
+func (v *Validator) Validate(admission *admissionv1.AdmissionRequest) (validation, error) {
+	// list of all validations to be applied
 	validations := []itemValidator{
-		nameValidator{v.Logger},
+		commonValidator{v.Logger},
 	}
 
 	// apply all validations
 	for _, v := range validations {
 		var err error
-		vp, err := v.Validate(service)
+		vp, err := v.Validate(admission)
 		if err != nil {
 			return validation{Valid: false, Reason: err.Error()}, err
 		}
@@ -56,5 +45,5 @@ func (v *Validator) Validate(service *corev1.Service) (validation, error) {
 		}
 	}
 
-	return validation{Valid: true, Reason: "valid service"}, nil
+	return validation{Valid: true, Reason: "valid"}, nil
 }

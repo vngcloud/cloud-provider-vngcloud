@@ -143,39 +143,6 @@ func init() {
 			}
 		}
 
-		// mutateconfig := &admissionregistrationv1.MutatingWebhookConfiguration{
-		// 	ObjectMeta: metav1.ObjectMeta{
-		// 		Name: commonName,
-		// 	},
-		// 	Webhooks: []admissionregistrationv1.MutatingWebhook{{
-		// 		Name: commonName + ".vngcloud.vn",
-		// 		ClientConfig: admissionregistrationv1.WebhookClientConfig{
-		// 			CABundle: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
-		// 			Service: &admissionregistrationv1.ServiceReference{
-		// 				Name:      commonName,
-		// 				Namespace: namespace,
-		// 				Path:      PointerOf(MUTATE_PATH),
-		// 				Port:      PointerOf(int32(PORT_HTTPS)),
-		// 			},
-		// 		},
-		// 		Rules: []admissionregistrationv1.RuleWithOperations{{
-		// 			Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
-		// 			Rule: admissionregistrationv1.Rule{
-		// 				APIGroups:   []string{""},
-		// 				APIVersions: []string{"v1"},
-		// 				Resources:   []string{"services"},
-		// 			},
-		// 		}},
-		// 		FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
-		// 		SideEffects:             PointerOf(admissionregistrationv1.SideEffectClassNone),
-		// 		AdmissionReviewVersions: []string{"v1"},
-		// 	}},
-		// }
-		// if _, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Create(context.TODO(), mutateconfig, metav1.CreateOptions{}); err != nil {
-		// 	log.Fatalf("Error creating MutatingWebhookConfiguration: %s", err)
-		// }
-		// log.Printf("MutatingWebhookConfiguration %s created successfully\n", commonName)
-
 		validateconfig := &admissionregistrationv1.ValidatingWebhookConfiguration{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: commonName,
@@ -321,7 +288,6 @@ func main() {
 
 	// handle our core application
 	http.HandleFunc(VALIDATE_PATH, ServeValidate)
-	http.HandleFunc(MUTATE_PATH, ServeMutate)
 	http.HandleFunc(HEALTH_PATH, ServeHealth)
 
 	// start the server
@@ -375,46 +341,6 @@ func ServeValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := adm.ValidateReview()
-	if err != nil {
-		e := fmt.Sprintf("could not generate admission response: %v", err)
-		logger.Error(e)
-		http.Error(w, e, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	jout, err := json.Marshal(out)
-	if err != nil {
-		e := fmt.Sprintf("could not parse admission response: %v", err)
-		logger.Error(e)
-		http.Error(w, e, http.StatusInternalServerError)
-		return
-	}
-
-	logger.Debug("sending response")
-	logger.Debugf("%s", jout)
-	fmt.Fprintf(w, "%s", jout)
-}
-
-// ServeMutate returns an admission review with mutations as a json patch
-// in the review response
-func ServeMutate(w http.ResponseWriter, r *http.Request) {
-	logger := logrus.WithField("uri", r.RequestURI)
-	logger.Debug("received mutation request")
-
-	in, err := parseRequest(*r)
-	if err != nil {
-		logger.Error(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	adm := admission.Admitter{
-		Logger:  logger,
-		Request: in.Request,
-	}
-
-	out, err := adm.MutateReview()
 	if err != nil {
 		e := fmt.Sprintf("could not generate admission response: %v", err)
 		logger.Error(e)
