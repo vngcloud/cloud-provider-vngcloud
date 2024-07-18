@@ -1061,14 +1061,6 @@ func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.
 	}
 	lbID, err = c.ensureLoadBalancerInstance(newIngExpander)
 	if err != nil {
-		if err == vErrors.ErrLoadBalancerStatusError {
-			klog.Infof("Load balancer %s is error, delete and create later", lbID)
-			if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lbID); errr != nil {
-				klog.Errorln("error when delete lb", err)
-				return nil, errr
-			}
-			return nil, err
-		}
 		klog.Errorln("error when ensure loadbalancer", err)
 		return nil, err
 	}
@@ -1094,7 +1086,19 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 			klog.Errorln("error when ensure tags", err)
 		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
-		vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+		lb, err = vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+		if err != nil {
+			if err == vErrors.ErrLoadBalancerStatusError {
+				klog.Infof("Load balancer %s is error, delete and create later", lb.UUID)
+				if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lb.UUID); errr != nil {
+					klog.Errorln("error when delete lb", err)
+					return "", errr
+				}
+				return "", err
+			}
+			klog.Errorf("error when get lb: %v", err)
+			return inspect.serviceConf.LoadBalancerID, err
+		}
 	}
 
 	lb, err := vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
