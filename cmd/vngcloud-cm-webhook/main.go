@@ -15,14 +15,15 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/vngcloud/cloud-provider-vngcloud/cmd/vngcloud-cm-webhook/admission"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	admissionv1 "k8s.io/api/admission/v1"
-	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	v1 "k8s.io/api/core/v1"
+	// admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -32,7 +33,6 @@ const (
 	MUTATE_PATH   = "/mutate"
 	VALIDATE_PATH = "/validate"
 	HEALTH_PATH   = "/health"
-	PORT_HTTPS    = 8443
 	PORT_HTTP     = 8080
 )
 
@@ -42,7 +42,7 @@ func PointerOf[T any](t T) *T {
 
 var (
 	commonName string
-	Haha       string
+	port_https int
 
 	isCreateSecret       bool
 	isCreateWehookConfig bool
@@ -53,6 +53,7 @@ var (
 
 func init() {
 	flag.StringVar(&commonName, "common-name", "", "common name for the server certificate")
+	flag.IntVar(&port_https, "port-https", 8443, "port for https server")
 
 	flag.BoolVar(&isCreateSecret, "create-secret", true, "create secret")
 	flag.BoolVar(&isCreateWehookConfig, "create-webhook-config", true, "create webhook config")
@@ -78,30 +79,23 @@ func init() {
 		// Build the Kubernetes client
 		clientset := buildClientset()
 
-		// Check if exist then delete
-		_, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), commonName, metav1.GetOptions{})
+		// Check if exist
+		curSecret, err := clientset.CoreV1().Secrets(namespace).Get(context.TODO(), commonName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("Secret %s not found in namespace %s", commonName, namespace)
-		} else {
-			err = clientset.CoreV1().Secrets(namespace).Delete(context.TODO(), commonName, metav1.DeleteOptions{})
-			if err != nil {
-				log.Fatalf("Error deleting secret: %s", err)
-			}
+			log.Fatalf("Secret %s not found in namespace %s", commonName, namespace)
 		}
 
-		// Create Kubernetes secrets
-		err = createSecret(clientset, namespace, commonName, map[string][]byte{
+		// Update secret data
+		curSecret.Data = map[string][]byte{
 			"tls.crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Raw}),
 			"tls.key": pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)}),
 			"ca.crt":  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
-		})
-		if err != nil {
-			log.Fatalf("Error creating server TLS secret: %s", err)
 		}
-		log.Printf("Secret %s/%s created successfully\n", namespace, commonName)
+		if _, err = clientset.CoreV1().Secrets(namespace).Update(context.TODO(), curSecret, metav1.UpdateOptions{}); err != nil {
+			log.Fatalf("Error updating server TLS secret: %s", err)
+		}
+		log.Printf("Secret %s/%s updated successfully\n", namespace, commonName)
 	}
-
-	log.Println("Certificates and secrets generated successfully")
 
 	// Check if the folder exists
 	if _, err := os.Stat(TLS_PATH); os.IsNotExist(err) {
@@ -122,49 +116,19 @@ func init() {
 	if isCreateWehookConfig {
 		clientset := buildClientset()
 
-		// Check if exist then delete
-		_, err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), commonName, metav1.GetOptions{})
+		// Check if exist
+		curConfig, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), commonName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("ValidatingWebhookConfiguration: %s not found", commonName)
-		} else {
-			err = clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(context.TODO(), commonName, metav1.DeleteOptions{})
-			if err != nil {
-				log.Fatalf("Error deleting ValidatingWebhookConfiguration: %s", err)
-			}
+			log.Fatalf("ValidatingWebhookConfiguration: %s not found", commonName)
 		}
 
-		validateconfig := &admissionregistrationv1.ValidatingWebhookConfiguration{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: commonName,
-			},
-			Webhooks: []admissionregistrationv1.ValidatingWebhook{{
-				Name: commonName + ".vngcloud.vn",
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					CABundle: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}),
-					Service: &admissionregistrationv1.ServiceReference{
-						Name:      commonName,
-						Namespace: namespace,
-						Path:      PointerOf(VALIDATE_PATH),
-						Port:      PointerOf(int32(PORT_HTTPS)),
-					},
-				},
-				Rules: []admissionregistrationv1.RuleWithOperations{{
-					Operations: []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
-					Rule: admissionregistrationv1.Rule{
-						APIGroups:   []string{""},
-						APIVersions: []string{"v1"},
-						Resources:   []string{"services"},
-					},
-				}},
-				FailurePolicy:           PointerOf(admissionregistrationv1.Fail),
-				SideEffects:             PointerOf(admissionregistrationv1.SideEffectClassNone),
-				AdmissionReviewVersions: []string{"v1"},
-			}},
+		// Update webhook config
+		curConfig.Webhooks[0].ClientConfig.CABundle = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw})
+
+		if _, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Update(context.TODO(), curConfig, metav1.UpdateOptions{}); err != nil {
+			log.Fatalf("Error updating ValidatingWebhookConfiguration: %s", err)
 		}
-		if _, err := clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Create(context.TODO(), validateconfig, metav1.CreateOptions{}); err != nil {
-			log.Fatalf("Error creating ValidatingWebhookConfiguration: %s", err)
-		}
-		log.Printf("ValidatingWebhookConfiguration %s created successfully\n", commonName)
+		log.Printf("ValidatingWebhookConfiguration %s updated successfully\n", commonName)
 	}
 }
 
@@ -236,19 +200,6 @@ func generateServerCertificate(caCert *x509.Certificate, caKey *rsa.PrivateKey, 
 	return serverCert, serverKey, nil
 }
 
-func createSecret(clientset *kubernetes.Clientset, namespace string, name string, data map[string][]byte) error {
-	secret := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Data: data,
-	}
-
-	_, err := clientset.CoreV1().Secrets(namespace).Create(context.TODO(), secret, metav1.CreateOptions{})
-	return err
-}
-
 func writeToFile(filename, blockType string, data []byte) {
 	file, err := os.Create(filename)
 	if err != nil {
@@ -280,17 +231,33 @@ func main() {
 	http.HandleFunc(VALIDATE_PATH, ServeValidate)
 	http.HandleFunc(HEALTH_PATH, ServeHealth)
 
-	// start the server
-	// listens to clear text http on port ... unless TLS env var is set to "true"
-	if os.Getenv("TLS") == "true" {
-		cert := TLS_PATH + "/tls.crt"
-		key := TLS_PATH + "/tls.key"
-		logrus.Printf("Listening on port %d ...", PORT_HTTPS)
-		logrus.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%d", PORT_HTTPS), cert, key, nil))
-	} else {
-		logrus.Printf("Listening on port %d ...", PORT_HTTP)
-		logrus.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", PORT_HTTP), nil))
-	}
+	// Channel to listen for OS signals
+	signalChan := make(chan os.Signal, 1)
+
+	// Goroutine to handle OS signals
+	go func() {
+		// start the server
+		// listens to clear text http on port ... unless TLS env var is set to "true"
+		if os.Getenv("TLS") == "true" {
+			cert := TLS_PATH + "/tls.crt"
+			key := TLS_PATH + "/tls.key"
+			logrus.Printf("Listening on port %d ...", port_https)
+			logrus.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%d", port_https), cert, key, nil))
+		} else {
+			logrus.Printf("Listening on port %d ...", PORT_HTTP)
+			logrus.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", PORT_HTTP), nil))
+		}
+	}()
+
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	sig := <-signalChan
+	fmt.Printf("Received signal shutting down: %s\n", sig)
+
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// delete resources here
+	close(signalChan)
+	log.Printf("Completed")
 }
 
 // setLogger sets the logger using env vars, it defaults to text logs on
