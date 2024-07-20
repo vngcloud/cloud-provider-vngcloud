@@ -13,14 +13,6 @@ env:
 jobs:
   build_package:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: vngcloud-ingress-controller
-          - image: vngcloud-controller-manager
-          - image: vngcloud-cm-webhook
-          - image: vngcloud-ic-webhook
     permissions:
       contents: write
       packages: write
@@ -56,11 +48,59 @@ jobs:
           platforms: linux/amd64
           outputs: type=registry
           tags: |
-            ghcr.io/vngcloud/${{ matrix.image }}:${{ github.sha }}
-            ghcr.io/vngcloud/${{ matrix.image }}:${{ github.ref_name }}
-            ${{ env.REPO }}/${{ matrix.image }}:${{ github.sha }}
-            ${{ env.REPO }}/${{ matrix.image }}:${{ github.ref_name }}
-          target: ${{ matrix.image }}
+            ghcr.io/vngcloud/vngcloud-ingress-controller:${{ github.sha }}
+            ghcr.io/vngcloud/vngcloud-ingress-controller:${{ github.ref_name }}
+            ${{ env.REPO }}/vngcloud-ingress-controller:${{ github.sha }}
+            ${{ env.REPO }}/vngcloud-ingress-controller:${{ github.ref_name }}
+          target: vngcloud-ingress-controller
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          platforms: linux/amd64
+          outputs: type=registry
+          tags: |
+            ghcr.io/vngcloud/vngcloud-controller-manager:${{ github.sha }}
+            ghcr.io/vngcloud/vngcloud-controller-manager:${{ github.ref_name }}
+            ${{ env.REPO }}/vngcloud-controller-manager:${{ github.sha }}
+            ${{ env.REPO }}/vngcloud-controller-manager:${{ github.ref_name }}
+          target: vngcloud-controller-manager
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          platforms: linux/amd64
+          outputs: type=registry
+          tags: |
+            ghcr.io/vngcloud/vngcloud-cm-webhook:${{ github.sha }}
+            ghcr.io/vngcloud/vngcloud-cm-webhook:${{ github.ref_name }}
+            ${{ env.REPO }}/vngcloud-cm-webhook:${{ github.sha }}
+            ${{ env.REPO }}/vngcloud-cm-webhook:${{ github.ref_name }}
+          target: vngcloud-cm-webhook
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          platforms: linux/amd64
+          outputs: type=registry
+          tags: |
+            ghcr.io/vngcloud/vngcloud-ic-webhook:${{ github.sha }}
+            ghcr.io/vngcloud/vngcloud-ic-webhook:${{ github.ref_name }}
+            ${{ env.REPO }}/vngcloud-ic-webhook:${{ github.sha }}
+            ${{ env.REPO }}/vngcloud-ic-webhook:${{ github.ref_name }}
+          target: vngcloud-ic-webhook
 
   create_release:
     runs-on: ubuntu-latest
