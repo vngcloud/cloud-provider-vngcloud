@@ -314,6 +314,23 @@ func ListNodeWithPredicate(nodeLister corelisters.NodeLister, nodeLabels map[str
 	return filtered, nil
 }
 
+// FilterByNodeLabel filters the given list of nodes by the given node labels.
+func FilterByNodeLabel(nodes []*apiv1.Node, nodeLabels map[string]string) []*apiv1.Node {
+	var filtered []*apiv1.Node
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		if node.Labels == nil {
+			continue
+		}
+		if labels.Set(nodeLabels).AsSelector().Matches(labels.Set(node.Labels)) {
+			filtered = append(filtered, node)
+		}
+	}
+	return filtered
+}
+
 func getNodeConditionPredicate(node *apiv1.Node) bool {
 	// We add the master to the node list, but its unschedulable.  So we use this to filter
 	// the master.

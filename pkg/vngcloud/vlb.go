@@ -21,6 +21,7 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
 	lCoreV1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -205,6 +206,10 @@ func (c *vLB) ensureLoadBalancer(
 	}()
 
 	serviceKey := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
+	pService, err := c.updateServiceAnnotation(pService)
+	if err != nil {
+		return nil, err
+	}
 	oldIngExpander, _ := c.inspectService(nil, pNodes)
 	if oldService, ok := c.serviceCache[serviceKey]; ok {
 		oldIngExpander, _ = c.inspectService(oldService, pNodes)
@@ -244,13 +249,26 @@ func (c *vLB) ensureLoadBalancer(
 	return lbStatus, nil
 }
 
-func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
+// when create new ingress, you should update the load balancer name annotation immediately,
+// avoid the case user update this annotation before load balancer is created
+// then webhook will not allow to update this annotation (just allow when this annotation is nil)
+// func (c *vLB) updateServiceAnnotation(serviceKey string) (*nwv1.Ingress, error)
+func (c *vLB) updateServiceAnnotation(pService *lCoreV1.Service) (*lCoreV1.Service, error) {
 	if pService.ObjectMeta.Annotations == nil {
 		pService.ObjectMeta.Annotations = map[string]string{}
 	}
-	// pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
-	pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = lb.Name
+	if _, ok := pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName]; !ok {
+		pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = utils.GenerateLBName(c.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
+		newObj, err := c.kubeClient.CoreV1().Services(pService.Namespace).Update(context.Background(), pService, metav1.UpdateOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return newObj, nil
+	}
+	return pService, nil
+}
 
+func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
 	status := &lCoreV1.LoadBalancerStatus{}
 	// Default to IP
 	status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
@@ -490,7 +508,12 @@ func (c *vLB) inspectService(pService *lCoreV1.Service, pNodes []*lCoreV1.Node) 
 		ingressInspect.LbOptions.Name = serviceConf.LoadBalancerName
 	}
 
-	membersAddr := utils.GetNodeMembersAddr(pNodes)
+	nodesAfterFilter := utils.FilterByNodeLabel(pNodes, serviceConf.TargetNodeLabels)
+	if len(nodesAfterFilter) < 1 {
+		klog.Errorf("No nodes found in the cluster")
+		return nil, vErrors.ErrNoNodeAvailable
+	}
+	membersAddr := utils.GetNodeMembersAddr(nodesAfterFilter)
 
 	// get subnetID of this ingress
 	providerIDs := utils.GetListProviderID(pNodes)

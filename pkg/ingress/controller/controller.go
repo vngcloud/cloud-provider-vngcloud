@@ -486,6 +486,12 @@ func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 		}
 	}
 
+	ingressKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
+	ing, err := c.updateIngressAnnotation(ingressKey)
+	if err != nil {
+		return err
+	}
+
 	lb, err := c.ensureCompareIngress(oldIng, ing)
 	if err != nil {
 		c.isReApplyNextTime = true
@@ -499,9 +505,10 @@ func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 	return err
 }
 
-func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBalancer) (*nwv1.Ingress, error) {
-	// get the latest version of ingress before update
-	ingressKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
+// when create new ingress, you should update the load balancer name annotation immediately,
+// avoid the case user update this annotation before load balancer is created
+// then webhook will not allow to update this annotation (just allow when this annotation is nil)
+func (c *Controller) updateIngressAnnotation(ingressKey string) (*nwv1.Ingress, error) {
 	latestIngress, err := utils.GetIngress(c.ingressLister, ingressKey)
 	if err != nil {
 		logrus.Errorf("Failed to get the latest version of ingress %s", ingressKey)
@@ -510,8 +517,25 @@ func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBal
 	if latestIngress.ObjectMeta.Annotations == nil {
 		latestIngress.ObjectMeta.Annotations = map[string]string{}
 	}
-	// latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
-	latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = lb.Name
+	if _, ok := latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName]; !ok {
+		latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = utils.GenerateLBName(c.getClusterID(), latestIngress.Namespace, latestIngress.Name, consts.RESOURCE_TYPE_INGRESS)
+		newObj, err := c.kubeClient.NetworkingV1().Ingresses(latestIngress.Namespace).Update(context.TODO(), latestIngress, apimetav1.UpdateOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return newObj, nil
+	}
+	return latestIngress, nil
+}
+
+func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBalancer) (*nwv1.Ingress, error) {
+	// get the latest version of ingress before update
+	ingressKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
+	latestIngress, err := utils.GetIngress(c.ingressLister, ingressKey)
+	if err != nil {
+		logrus.Errorf("Failed to get the latest version of ingress %s", ingressKey)
+		return nil, vErrors.ErrIngressNotFound
+	}
 
 	newIng := latestIngress.DeepCopy()
 	newState := new(nwv1.IngressLoadBalancerStatus)
@@ -703,6 +727,9 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 			// ensure default pool have the same member
 			dpool, err := vngcloudutil.FindPoolByName(c.vLBSC, c.getProjectID(), lbID, consts.DEFAULT_NAME_DEFAULT_POOL)
 			if err != nil {
+				if err == vErrors.ErrNotFound {
+					return true
+				}
 				klog.Errorln("error when find default pool", err)
 				return false
 			}
@@ -857,8 +884,8 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		ingressInspect.LbOptions.Name = serviceConf.LoadBalancerName
 	}
 
-	nodeObjs, err := utils.ListNodeWithPredicate(c.nodeLister, serviceConf.TargetNodeLabels)
-	if len(nodeObjs) < 1 {
+	nodesAfterFilter, err := utils.ListNodeWithPredicate(c.nodeLister, serviceConf.TargetNodeLabels)
+	if len(nodesAfterFilter) < 1 {
 		klog.Errorf("No nodes found in the cluster")
 		return nil, vErrors.ErrNoNodeAvailable
 	}
@@ -866,10 +893,10 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
 		return nil, err
 	}
-	membersAddr := utils.GetNodeMembersAddr(nodeObjs)
+	membersAddr := utils.GetNodeMembersAddr(nodesAfterFilter)
 
 	// get subnetID of this ingress
-	providerIDs := utils.GetListProviderID(nodeObjs)
+	providerIDs := utils.GetListProviderID(nodesAfterFilter)
 	if len(providerIDs) < 1 {
 		klog.Errorf("No nodes found in the cluster")
 		return nil, vErrors.ErrNoNodeAvailable
