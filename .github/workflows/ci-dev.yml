@@ -65,37 +65,3 @@ jobs:
             ${{ env.REPO }}/vngcloud-controller-manager:${{ github.sha }}
             ${{ env.REPO }}/vngcloud-controller-manager:${{ env.VERSION }}
           target: vngcloud-controller-manager
-      
-      - name: Build and push Docker image
-        env:
-          TARGET: vngcloud-cm-webhook
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          build-args: |
-            VERSION=${{ env.VERSION }}
-          platforms: linux/amd64
-          outputs: type=registry
-          tags: |
-            ghcr.io/vngcloud/vngcloud-cm-webhook:${{ github.sha }}
-            ${{ env.REPO }}/vngcloud-cm-webhook:${{ github.sha }}
-            ${{ env.REPO }}/vngcloud-cm-webhook:${{ env.VERSION }}
-          target: vngcloud-cm-webhook
-      
-      - name: Build and push Docker image
-        env:
-          TARGET: vngcloud-ic-webhook
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          build-args: |
-            VERSION=${{ env.VERSION }}
-          platforms: linux/amd64
-          outputs: type=registry
-          tags: |
-            ghcr.io/vngcloud/vngcloud-ic-webhook:${{ github.sha }}
-            ${{ env.REPO }}/vngcloud-ic-webhook:${{ github.sha }}
-            ${{ env.REPO }}/vngcloud-ic-webhook:${{ env.VERSION }}
-          target: vngcloud-ic-webhook
