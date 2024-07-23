@@ -21,7 +21,6 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
 	lCoreV1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -206,10 +205,6 @@ func (c *vLB) ensureLoadBalancer(
 	}()
 
 	serviceKey := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
-	pService, err := c.updateServiceAnnotation(pService)
-	if err != nil {
-		return nil, err
-	}
 	oldIngExpander, _ := c.inspectService(nil, pNodes)
 	if oldService, ok := c.serviceCache[serviceKey]; ok {
 		oldIngExpander, _ = c.inspectService(oldService, pNodes)
@@ -249,26 +244,13 @@ func (c *vLB) ensureLoadBalancer(
 	return lbStatus, nil
 }
 
-// when create new ingress, you should update the load balancer name annotation immediately,
-// avoid the case user update this annotation before load balancer is created
-// then webhook will not allow to update this annotation (just allow when this annotation is nil)
-// func (c *vLB) updateServiceAnnotation(serviceKey string) (*nwv1.Ingress, error)
-func (c *vLB) updateServiceAnnotation(pService *lCoreV1.Service) (*lCoreV1.Service, error) {
+func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
 	if pService.ObjectMeta.Annotations == nil {
 		pService.ObjectMeta.Annotations = map[string]string{}
 	}
-	if _, ok := pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName]; !ok {
-		pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = utils.GenerateLBName(c.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
-		newObj, err := c.kubeClient.CoreV1().Services(pService.Namespace).Update(context.Background(), pService, metav1.UpdateOptions{})
-		if err != nil {
-			return nil, err
-		}
-		return newObj, nil
-	}
-	return pService, nil
-}
+	pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
+	delete(pService.ObjectMeta.Annotations, ServiceAnnotationLoadBalancerName)
 
-func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
 	status := &lCoreV1.LoadBalancerStatus{}
 	// Default to IP
 	status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
@@ -622,16 +604,16 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 			klog.Errorln("error when ensure tags", err)
 		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
-		lb, err = vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+		_, err = vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 		if err != nil {
-			if err == vErrors.ErrLoadBalancerStatusError {
-				klog.Infof("Load balancer %s is error, delete and create later", lb.UUID)
-				if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lb.UUID); errr != nil {
-					klog.Errorln("error when delete lb", err)
-					return "", errr
-				}
-				return "", err
-			}
+			// if err == vErrors.ErrLoadBalancerStatusError {
+			// 	klog.Infof("Load balancer %s is error, delete and create later", lb.UUID)
+			// 	if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lb.UUID); errr != nil {
+			// 		klog.Errorln("error when delete lb", err)
+			// 		return "", errr
+			// 	}
+			// 	return "", err
+			// }
 			klog.Errorf("error when get lb: %v", err)
 			return inspect.serviceConf.LoadBalancerID, err
 		}

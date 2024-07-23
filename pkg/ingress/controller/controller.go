@@ -486,12 +486,6 @@ func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 		}
 	}
 
-	ingressKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
-	ing, err := c.updateIngressAnnotation(ingressKey)
-	if err != nil {
-		return err
-	}
-
 	lb, err := c.ensureCompareIngress(oldIng, ing)
 	if err != nil {
 		c.isReApplyNextTime = true
@@ -505,29 +499,6 @@ func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 	return err
 }
 
-// when create new ingress, you should update the load balancer name annotation immediately,
-// avoid the case user update this annotation before load balancer is created
-// then webhook will not allow to update this annotation (just allow when this annotation is nil)
-func (c *Controller) updateIngressAnnotation(ingressKey string) (*nwv1.Ingress, error) {
-	latestIngress, err := utils.GetIngress(c.ingressLister, ingressKey)
-	if err != nil {
-		logrus.Errorf("Failed to get the latest version of ingress %s", ingressKey)
-		return nil, vErrors.ErrIngressNotFound
-	}
-	if latestIngress.ObjectMeta.Annotations == nil {
-		latestIngress.ObjectMeta.Annotations = map[string]string{}
-	}
-	if _, ok := latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName]; !ok {
-		latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerName] = utils.GenerateLBName(c.getClusterID(), latestIngress.Namespace, latestIngress.Name, consts.RESOURCE_TYPE_INGRESS)
-		newObj, err := c.kubeClient.NetworkingV1().Ingresses(latestIngress.Namespace).Update(context.TODO(), latestIngress, apimetav1.UpdateOptions{})
-		if err != nil {
-			return nil, err
-		}
-		return newObj, nil
-	}
-	return latestIngress, nil
-}
-
 func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBalancer) (*nwv1.Ingress, error) {
 	// get the latest version of ingress before update
 	ingressKey := fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)
@@ -536,6 +507,12 @@ func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBal
 		logrus.Errorf("Failed to get the latest version of ingress %s", ingressKey)
 		return nil, vErrors.ErrIngressNotFound
 	}
+
+	if latestIngress.ObjectMeta.Annotations == nil {
+		latestIngress.ObjectMeta.Annotations = map[string]string{}
+	}
+	latestIngress.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
+	delete(latestIngress.ObjectMeta.Annotations, ServiceAnnotationLoadBalancerName)
 
 	newIng := latestIngress.DeepCopy()
 	newState := new(nwv1.IngressLoadBalancerStatus)
@@ -1113,16 +1090,16 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 			klog.Errorln("error when ensure tags", err)
 		}
 		inspect.serviceConf.LoadBalancerID = lb.UUID
-		lb, err = vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
+		_, err = vngcloudutil.WaitForLBActive(c.vLBSC, c.getProjectID(), inspect.serviceConf.LoadBalancerID)
 		if err != nil {
-			if err == vErrors.ErrLoadBalancerStatusError {
-				klog.Infof("Load balancer %s is error, delete and create later", lb.UUID)
-				if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lb.UUID); errr != nil {
-					klog.Errorln("error when delete lb", err)
-					return "", errr
-				}
-				return "", err
-			}
+			// if err == vErrors.ErrLoadBalancerStatusError {
+			// 	klog.Infof("Load balancer %s is error, delete and create later", lb.UUID)
+			// 	if errr := vngcloudutil.DeleteLB(c.vLBSC, c.getProjectID(), lb.UUID); errr != nil {
+			// 		klog.Errorln("error when delete lb", err)
+			// 		return "", errr
+			// 	}
+			// 	return "", err
+			// }
 			klog.Errorf("error when get lb: %v", err)
 			return inspect.serviceConf.LoadBalancerID, err
 		}
