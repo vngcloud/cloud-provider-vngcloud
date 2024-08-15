@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -516,7 +517,12 @@ func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBal
 
 	newIng := latestIngress.DeepCopy()
 	newState := new(nwv1.IngressLoadBalancerStatus)
-	newState.Ingress = []nwv1.IngressLoadBalancerIngress{{IP: lb.Address}}
+	addr := net.ParseIP(lb.Address)
+	if addr != nil {
+		newState.Ingress = []nwv1.IngressLoadBalancerIngress{{IP: lb.Address}}
+	} else {
+		newState.Ingress = []nwv1.IngressLoadBalancerIngress{{Hostname: lb.Address}}
+	}
 	newIng.Status.LoadBalancer = *newState
 
 	newObj, err := c.kubeClient.NetworkingV1().Ingresses(newIng.Namespace).UpdateStatus(context.TODO(), newIng, apimetav1.UpdateOptions{})
@@ -1126,6 +1132,9 @@ func (c *Controller) ensureLoadBalancerInstance(inspect *Expander) (string, erro
 		}
 		if lb.Internal != (inspect.LbOptions.Scheme == loadbalancer.CreateOptsSchemeOptInternal) {
 			klog.Warning("Load balancer scheme not match, must delete and recreate")
+		}
+		if lb.AutoScalable != inspect.LbOptions.AutoScalable {
+			klog.Warning("Load balancer auto-scalable not match, must delete and recreate")
 		}
 	}
 	checkDetailLB()

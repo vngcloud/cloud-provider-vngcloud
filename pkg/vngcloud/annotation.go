@@ -35,6 +35,7 @@ const (
 	ServiceAnnotationSecurityGroups   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/security-groups"
 	ServiceAnnotationTags             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/tags"
 	ServiceAnnotationScheme           = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/scheme"
+	ServiceAnnotationEnableAutoscale  = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-autoscale"
 
 	// // Listener annotations
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
@@ -95,6 +96,7 @@ type ServiceConfig struct {
 	IsAutoCreateSecurityGroup  bool
 	SecurityGroups             []string
 	EnableProxyProtocol        []string
+	EnableAutoscale            bool
 }
 
 func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
@@ -125,6 +127,7 @@ func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
 		IsAutoCreateSecurityGroup:  false,
 		SecurityGroups:             []string{},
 		EnableProxyProtocol:        []string{},
+		EnableAutoscale:            false,
 	}
 	if pService == nil {
 		return opt
@@ -254,16 +257,20 @@ func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
 	if proxy, ok := pService.Annotations[ServiceAnnotationProxyProtocol]; ok {
 		opt.EnableProxyProtocol = utils.ParseStringListAnnotation(proxy, ServiceAnnotationProxyProtocol)
 	}
+	if autoscale, ok := pService.Annotations[ServiceAnnotationEnableAutoscale]; ok {
+		opt.EnableAutoscale = utils.ParseBoolAnnotation(autoscale, ServiceAnnotationEnableAutoscale, opt.EnableAutoscale)
+	}
 	return opt
 }
 
 func (s *ServiceConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
 	opt := &loadbalancer.CreateOpts{
-		Name:      s.LoadBalancerName,
-		PackageID: s.PackageID,
-		Scheme:    s.Scheme,
-		SubnetID:  "",
-		Type:      s.LoadBalancerType,
+		Name:         s.LoadBalancerName,
+		PackageID:    s.PackageID,
+		Scheme:       s.Scheme,
+		SubnetID:     "",
+		Type:         s.LoadBalancerType,
+		AutoScalable: s.EnableAutoscale,
 	}
 	return opt
 }

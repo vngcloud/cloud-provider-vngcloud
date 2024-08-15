@@ -3,6 +3,7 @@ package vngcloud
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -245,6 +246,10 @@ func (c *vLB) ensureLoadBalancer(
 }
 
 func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
+	if pService == nil {
+		klog.Warningln("can't createLoadBalancerStatus, service is nil")
+		return nil
+	}
 	if pService.ObjectMeta.Annotations == nil {
 		pService.ObjectMeta.Annotations = map[string]string{}
 	}
@@ -252,8 +257,12 @@ func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.L
 	delete(pService.ObjectMeta.Annotations, ServiceAnnotationLoadBalancerName)
 
 	status := &lCoreV1.LoadBalancerStatus{}
-	// Default to IP
-	status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
+	addr := net.ParseIP(lb.Address)
+	if addr != nil {
+		status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
+	} else {
+		status.Ingress = []lCoreV1.LoadBalancerIngress{{Hostname: lb.Address}}
+	}
 	return status
 }
 
@@ -640,6 +649,9 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 		}
 		if lb.Internal != (inspect.LbOptions.Scheme == loadbalancer.CreateOptsSchemeOptInternal) {
 			klog.Warning("Load balancer scheme not match, must delete and recreate")
+		}
+		if lb.AutoScalable != inspect.LbOptions.AutoScalable {
+			klog.Warning("Load balancer auto-scalable not match, must delete and recreate")
 		}
 	}
 	checkDetailLB()

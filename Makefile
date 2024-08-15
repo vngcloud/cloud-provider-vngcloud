@@ -48,7 +48,7 @@ GOFLAGS		:=
 TAGS		:=
 LDFLAGS		:= "-w -s -X 'k8s.io/component-base/version.gitVersion=$(VERSION)' -X 'github.com/vngcloud/cloud-provider-vngcloud/pkg/version.Version=$(VERSION)'"
 GOX_LDFLAGS	:= $(shell echo "$(LDFLAGS) -extldflags \"-static\"")
-REGISTRY	?= vcr.vngcloud.vn/81-vks-public
+REGISTRY	?= vcr.vngcloud.vn/60108-annd2-ingress
 IMAGE_OS	?= linux
 IMAGE_NAMES	?= vngcloud-controller-manager \
 				vngcloud-ingress-controller

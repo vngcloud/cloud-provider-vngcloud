@@ -1,8 +1,6 @@
 package controller
 
 import (
-	"strconv"
-
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
@@ -37,6 +35,7 @@ const (
 	ServiceAnnotationTags             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/tags"
 	ServiceAnnotationScheme           = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/scheme"
 	ServiceAnnotationCertificateIDs   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/certificate-ids"
+	ServiceAnnotationEnableAutoscale  = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-autoscale"
 
 	// Listener annotations
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
@@ -98,6 +97,7 @@ type IngressConfig struct {
 	EnableStickySession        bool
 	EnableTLSEncryption        bool
 	CertificateIDs             []string
+	EnableAutoscale            bool
 }
 
 func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
@@ -130,6 +130,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		EnableStickySession:        false,
 		EnableTLSEncryption:        false,
 		CertificateIDs:             []string{},
+		EnableAutoscale:            false,
 	}
 	if pService == nil {
 		return opt
@@ -257,22 +258,10 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		opt.HealthcheckPort = utils.ParseIntAnnotation(port, ServiceAnnotationHealthcheckPort, opt.HealthcheckPort)
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationEnableStickySession]; ok {
-		switch option {
-		case "true", "false":
-			boolValue, _ := strconv.ParseBool(option)
-			opt.EnableStickySession = boolValue
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableStickySession)
-		}
+		opt.EnableStickySession = utils.ParseBoolAnnotation(option, ServiceAnnotationEnableStickySession, opt.EnableStickySession)
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationEnableTLSEncryption]; ok {
-		switch option {
-		case "true", "false":
-			boolValue, _ := strconv.ParseBool(option)
-			opt.EnableTLSEncryption = boolValue
-		default:
-			klog.Warningf("Invalid annotation \"%s\" value, must be true or false", ServiceAnnotationEnableTLSEncryption)
-		}
+		opt.EnableTLSEncryption = utils.ParseBoolAnnotation(option, ServiceAnnotationEnableTLSEncryption, opt.EnableTLSEncryption)
 	}
 	if option, ok := pService.Annotations[ServiceAnnotationCertificateIDs]; ok {
 		arr := utils.ParseStringListAnnotation(option, ServiceAnnotationCertificateIDs)
@@ -287,16 +276,20 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		}
 		opt.CertificateIDs = result
 	}
+	if option, ok := pService.Annotations[ServiceAnnotationEnableAutoscale]; ok {
+		opt.EnableAutoscale = utils.ParseBoolAnnotation(option, ServiceAnnotationEnableAutoscale, opt.EnableAutoscale)
+	}
 	return opt
 }
 
 func (s *IngressConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
 	opt := &loadbalancer.CreateOpts{
-		Name:      s.LoadBalancerName,
-		PackageID: s.PackageID,
-		Scheme:    s.Scheme,
-		SubnetID:  "",
-		Type:      s.LoadBalancerType,
+		Name:         s.LoadBalancerName,
+		PackageID:    s.PackageID,
+		Scheme:       s.Scheme,
+		SubnetID:     "",
+		Type:         s.LoadBalancerType,
+		AutoScalable: s.EnableAutoscale,
 	}
 	return opt
 }
