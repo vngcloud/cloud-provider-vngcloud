@@ -15,6 +15,13 @@ const (
 	DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX = "vks.vngcloud.vn"
 )
 
+type TargetType string
+
+const (
+	TargetTypeInstance TargetType = "instance"
+	TargetTypeIP       TargetType = "ip"
+)
+
 // Annotations
 const (
 	ServiceAnnotationIgnore = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/ignore"
@@ -45,6 +52,7 @@ const (
 
 	// // Pool annotations
 	ServiceAnnotationPoolAlgorithm   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/pool-algorithm" // both annotation and cloud-config
+	ServiceAnnotationTargetType      = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/target-type"
 	ServiceAnnotationProxyProtocol   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-proxy-protocol"
 	ServiceAnnotationHealthcheckPort = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/healthcheck-port"
 	// ServiceAnnotationEnableStickySession = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-sticky-session"
@@ -97,6 +105,7 @@ type ServiceConfig struct {
 	SecurityGroups             []string
 	EnableProxyProtocol        []string
 	EnableAutoscale            bool
+	TargetType                 TargetType
 }
 
 func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
@@ -204,7 +213,7 @@ func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
 			string(pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1):
 			opt.HealthcheckHttpVersion = pool.CreateOptsHealthCheckHttpVersionOpt(option)
 		default:
-			klog.Warningf("Invalid annotation \"%s\" value, muust be one of %s, %s", ServiceAnnotationHealthcheckHttpVersion,
+			klog.Warningf("Invalid annotation \"%s\" value, must be one of %s, %s", ServiceAnnotationHealthcheckHttpVersion,
 				pool.CreateOptsHealthCheckHttpVersionOptHttp1,
 				pool.CreateOptsHealthCheckHttpVersionOptHttp1Minor1)
 		}
@@ -259,6 +268,16 @@ func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
 	}
 	if autoscale, ok := pService.Annotations[ServiceAnnotationEnableAutoscale]; ok {
 		opt.EnableAutoscale = utils.ParseBoolAnnotation(autoscale, ServiceAnnotationEnableAutoscale, opt.EnableAutoscale)
+	}
+	if option, ok := pService.Annotations[ServiceAnnotationTargetType]; ok {
+		switch option {
+		case string(TargetTypeInstance):
+			opt.TargetType = TargetTypeInstance
+		case string(TargetTypeIP):
+			opt.TargetType = TargetTypeIP
+		default:
+			klog.Warningf("Invalid annotation \"%s\" value, must be \"%s\" or \"%s\"", ServiceAnnotationTargetType, string(TargetTypeInstance), string(TargetTypeIP))
+		}
 	}
 	return opt
 }

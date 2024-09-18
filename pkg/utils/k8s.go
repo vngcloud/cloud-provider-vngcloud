@@ -74,7 +74,7 @@ func GetService(serviceLister corelisters.ServiceLister, key string) (*apiv1.Ser
 	return service, nil
 }
 
-func GetServiceNodePort(serviceLister corelisters.ServiceLister, name string, serviceBackend *nwv1.IngressServiceBackend) (int, error) {
+func GetServiceNodePort(serviceLister corelisters.ServiceLister, name string, serviceBackend *nwv1.IngressServiceBackend) (int, int, error) {
 	var portInfo intstr.IntOrString
 	if serviceBackend.Port.Name != "" {
 		portInfo.Type = intstr.String
@@ -86,27 +86,30 @@ func GetServiceNodePort(serviceLister corelisters.ServiceLister, name string, se
 
 	svc, err := GetService(serviceLister, name)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
+	var targetPort int
 	var nodePort int
 	ports := svc.Spec.Ports
 	for _, p := range ports {
 		if portInfo.Type == intstr.Int && int(p.Port) == portInfo.IntValue() {
 			nodePort = int(p.NodePort)
+			targetPort = int(p.TargetPort.IntValue())
 			break
 		}
 		if portInfo.Type == intstr.String && p.Name == portInfo.StrVal {
 			nodePort = int(p.NodePort)
+			targetPort = int(p.TargetPort.IntValue())
 			break
 		}
 	}
 
-	if nodePort == 0 {
-		return 0, fmt.Errorf("failed to find nodeport for service %s:%s", name, portInfo.String())
+	if nodePort == 0 || targetPort == 0 {
+		return 0, 0, fmt.Errorf("failed to find nodeport for service %s:%s", name, portInfo.String())
 	}
 
-	return nodePort, nil
+	return targetPort, nodePort, nil
 }
 
 func GetNodeMembersAddr(nodeObjs []*apiv1.Node) []string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -68,19 +69,22 @@ type (
 		vLbConfig     VLbOpts
 		serviceCache  map[string]*lCoreV1.Service
 
-		knownNodes          []*lCoreV1.Node
-		serviceLister       corelisters.ServiceLister
-		serviceListerSynced cache.InformerSynced
-		stopCh              chan struct{}
-		informer            informers.SharedInformerFactory
-		config              *Config
+		knownNodes           []*lCoreV1.Node
+		serviceLister        corelisters.ServiceLister
+		serviceListerSynced  cache.InformerSynced
+		endpointLister       corelisters.EndpointsLister
+		endpointListerSynced cache.InformerSynced
+		stopCh               chan struct{}
+		informer             informers.SharedInformerFactory
+		config               *Config
 
 		isReApplyNextTime   bool
 		trackLBUpdate       *utils.UpdateTracker
 		mu                  sync.Mutex
 		numOfUpdatingThread int
 
-		stringKeyLock *utils.StringKeyLock
+		stringKeyLock     *utils.StringKeyLock
+		resourceDependant utils.ResourceDependant
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -106,12 +110,67 @@ func (c *vLB) Init() {
 	c.informer = kubeInformerFactory
 	c.numOfUpdatingThread = 0
 	c.stringKeyLock = utils.NewStringKeyLock()
+	c.resourceDependant = utils.NewResourceDependant()
+
+	endpointInformer := kubeInformerFactory.Core().V1().Endpoints()
+	_, err := endpointInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			object := obj.(*lCoreV1.Endpoints)
+			requests := c.resourceDependant.GetServiceNeedReconcile("endpoint", object.GetNamespace(), object.GetName())
+			if len(requests) == 0 {
+				return
+			}
+			klog.Infof("Endpoint %s/%s is added, reapply load balancer for services: %v", object.Namespace, object.Name, requests)
+			for _, req := range requests {
+				service, err := c.serviceLister.Services(req.Namespace).Get(req.Name)
+				if err != nil {
+					klog.Errorf("Failed to get service %s/%s: %v", req.Namespace, req.Name, err)
+					continue
+				}
+				if _, err := c.EnsureLoadBalancer(context.Background(), c.getClusterName(), service, c.knownNodes); err != nil {
+					klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
+				}
+			}
+		},
+		UpdateFunc: func(old, new interface{}) {
+			objectOld := old.(*lCoreV1.Endpoints)
+			objectNew := new.(*lCoreV1.Endpoints)
+			if reflect.DeepEqual(objectOld.Subsets, objectNew.Subsets) {
+				return
+			}
+			requests := c.resourceDependant.GetServiceNeedReconcile("endpoint", objectNew.GetNamespace(), objectNew.GetName())
+			if len(requests) == 0 {
+				return
+			}
+			klog.Infof("Endpoint %s/%s is update, reapply load balancer for services: %v", objectNew.Namespace, objectNew.Name, requests)
+			for _, req := range requests {
+				service, err := c.serviceLister.Services(req.Namespace).Get(req.Name)
+				if err != nil {
+					klog.Errorf("Failed to get service %s/%s: %v", req.Namespace, req.Name, err)
+					continue
+				}
+				if _, err := c.EnsureLoadBalancer(context.Background(), c.getClusterName(), service, c.knownNodes); err != nil {
+					klog.Errorf("Failed to reapply load balancer for service %s: %v", service.Name, err)
+				}
+			}
+		},
+		DeleteFunc: func(obj interface{}) {},
+	})
+
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err,
+		}).Fatal("failed to initialize endpoint informer")
+	}
+
+	c.endpointLister = endpointInformer.Lister()
+	c.endpointListerSynced = endpointInformer.Informer().HasSynced
 
 	defer close(c.stopCh)
 	go c.informer.Start(c.stopCh)
 
 	// wait for the caches to synchronize before starting the worker
-	if !cache.WaitForCacheSync(c.stopCh, c.serviceListerSynced) {
+	if !cache.WaitForCacheSync(c.stopCh, c.serviceListerSynced, c.endpointListerSynced) {
 		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
 		return
 	}
@@ -242,6 +301,8 @@ func (c *vLB) ensureLoadBalancer(
 	klog.Infof(
 		"Load balancer %s for service %s/%s is ready to use for Kubernetes controller\n----- DONE ----- ",
 		lb.Name, pService.Namespace, pService.Name)
+
+	c.resourceDependant.SetService(pService, newIngExpander.serviceConf.TargetType == TargetTypeIP)
 	return lbStatus, nil
 }
 
@@ -271,6 +332,7 @@ func (c *vLB) getProjectID() string {
 }
 
 func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *lCoreV1.Service) error {
+	c.resourceDependant.ClearService(pService.Namespace, pService.Name)
 	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
 			klog.Infof("Ignore ensure for service %s/%s", pService.Namespace, pService.Name)
@@ -555,15 +617,45 @@ func (c *vLB) inspectService(pService *lCoreV1.Service, pNodes []*lCoreV1.Node) 
 		}
 
 		members := make([]*pool.Member, 0)
-		for _, addr := range membersAddr {
-			members = append(members, &pool.Member{
-				IpAddress:   addr,
-				Port:        int(port.NodePort),
-				Backup:      false,
-				Weight:      1,
-				Name:        poolName,
-				MonitorPort: monitorPort,
-			})
+		if serviceConf.TargetType == TargetTypeIP {
+			endpoints, err := c.endpointLister.Endpoints(pService.Namespace).Get(pService.Name)
+			if err != nil {
+				klog.Errorf("Failed to get endpoints: %v", err)
+				return nil, err
+			}
+			for _, subset := range endpoints.Subsets {
+				for _, addr := range subset.Addresses {
+					members = append(members, &pool.Member{
+						IpAddress:   addr.IP,
+						Port:        port.TargetPort.IntValue(),
+						Backup:      false,
+						Weight:      1,
+						Name:        addr.TargetRef.Name,
+						MonitorPort: port.TargetPort.IntValue(),
+					})
+				}
+				for _, addr := range subset.NotReadyAddresses {
+					members = append(members, &pool.Member{
+						IpAddress:   addr.IP,
+						Port:        port.TargetPort.IntValue(),
+						Backup:      false,
+						Weight:      1,
+						Name:        addr.TargetRef.Name,
+						MonitorPort: port.TargetPort.IntValue(),
+					})
+				}
+			}
+		} else {
+			for _, addr := range membersAddr {
+				members = append(members, &pool.Member{
+					IpAddress:   addr,
+					Port:        int(port.NodePort),
+					Backup:      false,
+					Weight:      1,
+					Name:        poolName,
+					MonitorPort: monitorPort,
+				})
+			}
 		}
 		poolOptions := serviceConf.CreatePoolOptions(port)
 		poolOptions.PoolName = poolName

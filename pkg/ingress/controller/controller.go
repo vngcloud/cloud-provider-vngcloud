@@ -28,6 +28,7 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	nwv1 "k8s.io/api/networking/v1"
 	apimetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -71,17 +72,19 @@ type Controller struct {
 	config     *config.Config
 	kubeClient kubernetes.Interface
 
-	stopCh              chan struct{}
-	knownNodes          []*apiv1.Node
-	queue               workqueue.RateLimitingInterface
-	informer            informers.SharedInformerFactory
-	recorder            record.EventRecorder
-	ingressLister       nwlisters.IngressLister
-	ingressListerSynced cache.InformerSynced
-	serviceLister       corelisters.ServiceLister
-	serviceListerSynced cache.InformerSynced
-	nodeLister          corelisters.NodeLister
-	nodeListerSynced    cache.InformerSynced
+	stopCh               chan struct{}
+	knownNodes           []*apiv1.Node
+	queue                workqueue.RateLimitingInterface
+	informer             informers.SharedInformerFactory
+	recorder             record.EventRecorder
+	ingressLister        nwlisters.IngressLister
+	ingressListerSynced  cache.InformerSynced
+	serviceLister        corelisters.ServiceLister
+	serviceListerSynced  cache.InformerSynced
+	nodeLister           corelisters.NodeLister
+	nodeListerSynced     cache.InformerSynced
+	endpointLister       corelisters.EndpointsLister
+	endpointListerSynced cache.InformerSynced
 
 	// vks
 	provider  *vconSdkClient.ProviderClient
@@ -97,6 +100,8 @@ type Controller struct {
 	mu2     sync.Mutex
 	queues  map[string][]interface{}
 	workers map[string]chan bool
+
+	resourceDependant utils.ResourceDependant
 }
 
 // NewController creates a new VngCloud Ingress controller.
@@ -140,6 +145,7 @@ func NewController(conf config.Config) *Controller {
 		numOfUpdatingThread: 0,
 		queues:              make(map[string][]interface{}),
 		workers:             make(map[string]chan bool),
+		resourceDependant:   utils.NewResourceDependant(),
 	}
 
 	ingInformer := kubeInformerFactory.Networking().V1().Ingresses()
@@ -221,6 +227,56 @@ func NewController(conf config.Config) *Controller {
 	controller.ingressLister = ingInformer.Lister()
 	controller.ingressListerSynced = ingInformer.Informer().HasSynced
 
+	endpointInformer := kubeInformerFactory.Core().V1().Endpoints()
+	_, err = endpointInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			object := obj.(*corev1.Endpoints)
+			requests := controller.resourceDependant.GetIngressNeedReconcile("endpoint", object.GetNamespace(), object.GetName())
+			if len(requests) == 0 {
+				return
+			}
+			klog.Infof("Endpoint %s/%s is added, reapply for ingress: %v", object.Namespace, object.Name, requests)
+			for _, req := range requests {
+				ingress, err := controller.ingressLister.Ingresses(req.Namespace).Get(req.Name)
+				if err != nil {
+					klog.Errorf("Failed to get ingress %s/%s: %v", req.Namespace, req.Name, err)
+					continue
+				}
+				controller.queue.AddRateLimited(Event{Obj: ingress, Type: SyncEvent, oldObj: nil})
+			}
+		},
+		UpdateFunc: func(old, new interface{}) {
+			objectOld := old.(*corev1.Endpoints)
+			objectNew := new.(*corev1.Endpoints)
+			if reflect.DeepEqual(objectOld.Subsets, objectNew.Subsets) {
+				return
+			}
+			requests := controller.resourceDependant.GetIngressNeedReconcile("endpoint", objectNew.GetNamespace(), objectNew.GetName())
+			if len(requests) == 0 {
+				return
+			}
+			klog.Infof("Endpoint %s/%s is added, reapply for ingress: %v", objectNew.Namespace, objectNew.Name, requests)
+			for _, req := range requests {
+				ingress, err := controller.ingressLister.Ingresses(req.Namespace).Get(req.Name)
+				if err != nil {
+					klog.Errorf("Failed to get ingress %s/%s: %v", req.Namespace, req.Name, err)
+					continue
+				}
+				controller.queue.AddRateLimited(Event{Obj: ingress, Type: SyncEvent, oldObj: nil})
+			}
+		},
+		DeleteFunc: func(obj interface{}) {},
+	})
+
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err,
+		}).Fatal("failed to initialize endpoint informer")
+	}
+
+	controller.endpointLister = endpointInformer.Lister()
+	controller.endpointListerSynced = endpointInformer.Informer().HasSynced
+
 	return controller
 }
 
@@ -242,7 +298,7 @@ func (c *Controller) Start() {
 	go c.informer.Start(c.stopCh)
 
 	// wait for the caches to synchronize before starting the worker
-	if !cache.WaitForCacheSync(c.stopCh, c.ingressListerSynced, c.serviceListerSynced, c.nodeListerSynced) {
+	if !cache.WaitForCacheSync(c.stopCh, c.ingressListerSynced, c.serviceListerSynced, c.nodeListerSynced, c.endpointListerSynced) {
 		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
 		return
 	}
@@ -467,10 +523,11 @@ func (c *Controller) processItem(event Event) {
 func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 	if option, ok := ing.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
-			klog.Infof("Ignore ensure for service %s/%s", ing.Namespace, ing.Name)
+			klog.Infof("Ignore ensure for ingress %s/%s", ing.Namespace, ing.Name)
 			return nil
 		}
 	}
+	c.resourceDependant.ClearIngress(ing.Namespace, ing.Name)
 
 	err := c.DeleteLoadbalancer(ing)
 	if err != nil {
@@ -482,7 +539,7 @@ func (c *Controller) deleteIngress(ing *nwv1.Ingress) error {
 func (c *Controller) ensureIngress(oldIng, ing *nwv1.Ingress) error {
 	if option, ok := ing.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
-			klog.Infof("Ignore ensure for service %s/%s", ing.Namespace, ing.Name)
+			klog.Infof("Ignore ensure for ingress %s/%s", ing.Namespace, ing.Name)
 			return nil
 		}
 	}
@@ -920,10 +977,10 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 	mapTLS := mapHostTLS(ing)
 
 	GetPoolExpander := func(service *nwv1.IngressServiceBackend) (*utils.PoolExpander, error) {
-		serviceName := fmt.Sprintf("%s/%s", ing.ObjectMeta.Namespace, service.Name)
+		serviceKey := fmt.Sprintf("%s/%s", ing.ObjectMeta.Namespace, service.Name)
 		poolName := utils.GeneratePoolName(c.getClusterID(), ing.Namespace, ing.Name, consts.RESOURCE_TYPE_INGRESS,
-			serviceName, int(service.Port.Number))
-		nodePort, err := utils.GetServiceNodePort(c.serviceLister, serviceName, service)
+			serviceKey, int(service.Port.Number))
+		targetPort, nodePort, err := utils.GetServiceNodePort(c.serviceLister, serviceKey, service)
 		if err != nil {
 			klog.Errorf("error when get node port: %v", err)
 			return nil, err
@@ -938,15 +995,45 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		}
 
 		members := make([]*pool.Member, 0)
-		for _, addr := range membersAddr {
-			members = append(members, &pool.Member{
-				IpAddress:   addr,
-				Port:        nodePort,
-				Backup:      false,
-				Weight:      1,
-				Name:        poolName,
-				MonitorPort: monitorPort,
-			})
+		if serviceConf.TargetType == TargetTypeIP {
+			endpoints, err := c.endpointLister.Endpoints(ing.Namespace).Get(service.Name)
+			if err != nil {
+				klog.Errorf("Failed to get endpoints: %v", err)
+				return nil, err
+			}
+			for _, subset := range endpoints.Subsets {
+				for _, addr := range subset.Addresses {
+					members = append(members, &pool.Member{
+						IpAddress:   addr.IP,
+						Port:        targetPort,
+						Backup:      false,
+						Weight:      1,
+						Name:        addr.TargetRef.Name,
+						MonitorPort: targetPort,
+					})
+				}
+				for _, addr := range subset.NotReadyAddresses {
+					members = append(members, &pool.Member{
+						IpAddress:   addr.IP,
+						Port:        targetPort,
+						Backup:      false,
+						Weight:      1,
+						Name:        addr.TargetRef.Name,
+						MonitorPort: targetPort,
+					})
+				}
+			}
+		} else {
+			for _, addr := range membersAddr {
+				members = append(members, &pool.Member{
+					IpAddress:   addr,
+					Port:        nodePort,
+					Backup:      false,
+					Weight:      1,
+					Name:        poolName,
+					MonitorPort: monitorPort,
+				})
+			}
 		}
 		poolOptions := serviceConf.CreatePoolOptions()
 		poolOptions.PoolName = poolName
@@ -1077,6 +1164,7 @@ func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.
 		klog.Errorln("error when compare ingress", err)
 		return nil, err
 	}
+	c.resourceDependant.SetIngress(ing, newIngExpander.serviceConf.TargetType == TargetTypeIP)
 	return lb, nil
 }
 
