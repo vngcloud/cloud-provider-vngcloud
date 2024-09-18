@@ -54,6 +54,8 @@ type IngressInspect struct {
 	Namespace   string
 	LbOptions   *loadbalancer.CreateOpts // create options for lb
 	SubnetCIDR  string
+	SubnetID    string // nodes may have different subnets, so we need to store the subnet id of LB
+	NetworkID   string // nodes may have different subnets, so we need to store the subnet id of LB
 
 	PolicyExpander       []*PolicyExpander
 	PoolExpander         []*PoolExpander

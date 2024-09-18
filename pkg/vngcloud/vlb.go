@@ -519,24 +519,21 @@ func (c *vLB) inspectService(pService *lCoreV1.Service, pNodes []*lCoreV1.Node) 
 		return nil, err
 	}
 
-	// Check the nodes are in the same subnet
-	subnetID, retErr := vngcloudutil.EnsureNodesInCluster(servers)
+	// Check the nodes are in the same VPC
+	networkID, subnetIDs, retErr := vngcloudutil.EnsureNodesInCluster(servers)
 	if retErr != nil {
-		plog.Errorf("All node are not in a same subnet: %v", retErr)
+		plog.Errorf("All node are not in a same VPC: %v", retErr)
 		return nil, retErr
 	}
-	networkID := vngcloudutil.GetNetworkID(servers, subnetID)
-	if networkID == "" {
-		klog.Errorf("Failed to get networkID from subnetID: %s", subnetID)
-		return nil, vErrors.ErrNetworkIDNotFound
-	}
-	subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetID)
+	subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), networkID, subnetIDs[0])
 	if err != nil {
 		klog.Errorf("Failed to get subnet: %v", err)
 		return nil, err
 	}
+	ingressInspect.NetworkID = networkID
+	ingressInspect.SubnetID = subnetIDs[0]
 	ingressInspect.SubnetCIDR = subnet.CIDR
-	ingressInspect.LbOptions.SubnetID = subnetID
+	ingressInspect.LbOptions.SubnetID = subnetIDs[0]
 	ingressInspect.InstanceIDs = providerIDs
 
 	// Ensure pools and listener for this loadbalancer
@@ -632,6 +629,15 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 	if err != nil {
 		klog.Errorf("error when get lb: %v", err)
 		return inspect.serviceConf.LoadBalancerID, err
+	}
+	if inspect.SubnetID != lb.SubnetID {
+		subnet, err := vngcloudutil.GetSubnet(c.vServerSC, c.getProjectID(), inspect.NetworkID, lb.SubnetID)
+		if err != nil {
+			klog.Errorf("Failed to get subnet: %v", err)
+			return "", err
+		}
+		inspect.SubnetID = lb.SubnetID
+		inspect.SubnetCIDR = subnet.CIDR
 	}
 
 	checkDetailLB := func() {

@@ -54,26 +54,35 @@ func SetupPortalInfo(pProvider *client2.ProviderClient, pMedatata metadata.IMeta
 	}, nil
 }
 
-func EnsureNodesInCluster(pserver []*lObjects.Server) (string, error) {
-	subnetMapping := make(map[string]int)
+func getKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+func EnsureNodesInCluster(pserver []*lObjects.Server) (string, []string, error) {
+	networkIDs := make(map[string]bool)
+	subnetIDs := make(map[string]bool)
+
+	if len(pserver) == 0 {
+		return "", []string{}, vErrors.ErrNodesAreNotSameSubnet
+	}
+
 	for _, server := range pserver {
-		subnets := listSubnetIDs(server)
-		for _, subnet := range subnets {
-			if smi, ok := subnetMapping[subnet]; !ok {
-				subnetMapping[subnet] = 1
-			} else {
-				subnetMapping[subnet] = smi + 1
-			}
+		for _, subnet := range server.InternalInterfaces {
+			networkIDs[subnet.NetworkUuid] = true
+			subnetIDs[subnet.SubnetUuid] = true
 		}
 	}
 
-	for subnet, count := range subnetMapping {
-		if count == len(pserver) && len(subnet) > 0 {
-			return subnet, nil
-		}
+	if len(networkIDs) != 1 || len(subnetIDs) < 1 {
+		return "", nil, vErrors.ErrNodesAreNotSameSubnet
 	}
 
-	return "", vErrors.ErrNodesAreNotSameSubnet
+	klog.Infof("EnsureNodesInCluster; networkIDs: %v, subnetIDs: %v", networkIDs, subnetIDs)
+
+	return getKeys(networkIDs)[0], getKeys(subnetIDs), nil
 }
 
 func listSubnetIDs(s *lObjects.Server) []string {
