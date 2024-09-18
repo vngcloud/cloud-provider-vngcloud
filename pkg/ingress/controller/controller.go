@@ -27,7 +27,6 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/policy"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
-	apiv1 "k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	nwv1 "k8s.io/api/networking/v1"
 	apimetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,7 +72,7 @@ type Controller struct {
 	kubeClient kubernetes.Interface
 
 	stopCh               chan struct{}
-	knownNodes           []*apiv1.Node
+	knownNodes           []*corev1.Node
 	queue                workqueue.RateLimitingInterface
 	informer             informers.SharedInformerFactory
 	recorder             record.EventRecorder
@@ -126,7 +125,7 @@ func NewController(conf config.Config) *Controller {
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{
 		Interface: kubeClient.CoreV1().Events(""),
 	})
-	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, apiv1.EventSource{Component: "vngcloud-ingress-controller"})
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vngcloud-ingress-controller"})
 
 	controller := &Controller{
 		config:     &conf,
@@ -140,7 +139,7 @@ func NewController(conf config.Config) *Controller {
 		serviceListerSynced: serviceInformer.Informer().HasSynced,
 		nodeLister:          nodeInformer.Lister(),
 		nodeListerSynced:    nodeInformer.Informer().HasSynced,
-		knownNodes:          []*apiv1.Node{},
+		knownNodes:          []*corev1.Node{},
 		trackLBUpdate:       utils.NewUpdateTracker(),
 		numOfUpdatingThread: 0,
 		queues:              make(map[string][]interface{}),
@@ -159,7 +158,7 @@ func NewController(conf config.Config) *Controller {
 				return
 			}
 
-			recorder.Event(addIng, apiv1.EventTypeNormal, "Creating", fmt.Sprintf("Ingress %s", key))
+			recorder.Event(addIng, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Ingress %s", key))
 			controller.queue.AddRateLimited(Event{Obj: addIng, Type: CreateEvent, oldObj: nil})
 		},
 		UpdateFunc: func(old, new interface{}) {
@@ -179,13 +178,13 @@ func NewController(conf config.Config) *Controller {
 			validOld := IsValid(oldIng)
 			validCur := IsValid(newIng)
 			if !validOld && validCur {
-				recorder.Event(newIng, apiv1.EventTypeNormal, "Creating", fmt.Sprintf("Ingress %s", key))
+				recorder.Event(newIng, corev1.EventTypeNormal, "Creating", fmt.Sprintf("Ingress %s", key))
 				controller.queue.AddRateLimited(Event{Obj: newIng, Type: CreateEvent, oldObj: nil})
 			} else if validOld && !validCur {
-				recorder.Event(newIng, apiv1.EventTypeNormal, "Deleting", fmt.Sprintf("Ingress %s", key))
+				recorder.Event(newIng, corev1.EventTypeNormal, "Deleting", fmt.Sprintf("Ingress %s", key))
 				controller.queue.AddRateLimited(Event{Obj: newIng, Type: DeleteEvent, oldObj: nil})
 			} else if validCur && (!reflect.DeepEqual(newIng.Spec, oldIng.Spec) || !reflect.DeepEqual(newAnnotations, oldAnnotations)) {
-				recorder.Event(newIng, apiv1.EventTypeNormal, "Updating", fmt.Sprintf("Ingress %s", key))
+				recorder.Event(newIng, corev1.EventTypeNormal, "Updating", fmt.Sprintf("Ingress %s", key))
 				controller.queue.AddRateLimited(Event{Obj: newIng, Type: UpdateEvent, oldObj: oldIng})
 			} else {
 				return
@@ -213,7 +212,7 @@ func NewController(conf config.Config) *Controller {
 				return
 			}
 
-			recorder.Event(delIng, apiv1.EventTypeNormal, "Deleting", fmt.Sprintf("Ingress %s", key))
+			recorder.Event(delIng, corev1.EventTypeNormal, "Deleting", fmt.Sprintf("Ingress %s", key))
 			controller.queue.AddRateLimited(Event{Obj: delIng, Type: DeleteEvent, oldObj: nil})
 		},
 	})
@@ -483,36 +482,36 @@ func (c *Controller) processItem(event Event) {
 
 		if err := c.ensureIngress(oldIng, ing); err != nil {
 			utilruntime.HandleError(fmt.Errorf("failed to create vngcloud resources for ingress %s: %v", key, err))
-			c.recorder.Event(ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to create vngcloud resources for ingress %s: %v", key, err))
+			c.recorder.Event(ing, corev1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to create vngcloud resources for ingress %s: %v", key, err))
 		} else {
-			c.recorder.Event(ing, apiv1.EventTypeNormal, "Created", fmt.Sprintf("Ingress %s", key))
+			c.recorder.Event(ing, corev1.EventTypeNormal, "Created", fmt.Sprintf("Ingress %s", key))
 		}
 	case UpdateEvent:
 		logger.Info("updating ingress")
 
 		if err := c.ensureIngress(oldIng, ing); err != nil {
 			utilruntime.HandleError(fmt.Errorf("failed to update vngcloud resources for ingress %s: %v", key, err))
-			c.recorder.Event(ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to update vngcloud resources for ingress %s: %v", key, err))
+			c.recorder.Event(ing, corev1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to update vngcloud resources for ingress %s: %v", key, err))
 		} else {
-			c.recorder.Event(ing, apiv1.EventTypeNormal, "Updated", fmt.Sprintf("Ingress %s", key))
+			c.recorder.Event(ing, corev1.EventTypeNormal, "Updated", fmt.Sprintf("Ingress %s", key))
 		}
 	case DeleteEvent:
 		logger.Info("deleting ingress")
 
 		if err := c.deleteIngress(ing); err != nil {
 			utilruntime.HandleError(fmt.Errorf("failed to delete vngcloud resources for ingress %s: %v", key, err))
-			c.recorder.Event(ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to delete vngcloud resources for ingress %s: %v", key, err))
+			c.recorder.Event(ing, corev1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to delete vngcloud resources for ingress %s: %v", key, err))
 		} else {
-			c.recorder.Event(ing, apiv1.EventTypeNormal, "Deleted", fmt.Sprintf("Ingress %s", key))
+			c.recorder.Event(ing, corev1.EventTypeNormal, "Deleted", fmt.Sprintf("Ingress %s", key))
 		}
 	case SyncEvent:
 		logger.Info("sync ingress")
 
 		if err := c.ensureIngress(oldIng, ing); err != nil {
 			utilruntime.HandleError(fmt.Errorf("failed to sync vngcloud resources for ingress %s: %v", key, err))
-			c.recorder.Event(ing, apiv1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to sync vngcloud resources for ingress %s: %v", key, err))
+			c.recorder.Event(ing, corev1.EventTypeWarning, "Failed", fmt.Sprintf("Failed to sync vngcloud resources for ingress %s: %v", key, err))
 		} else {
-			c.recorder.Event(ing, apiv1.EventTypeNormal, "Synced", fmt.Sprintf("Ingress %s", key))
+			c.recorder.Event(ing, corev1.EventTypeNormal, "Synced", fmt.Sprintf("Ingress %s", key))
 		}
 	}
 
@@ -586,7 +585,7 @@ func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBal
 	if err != nil {
 		return nil, err
 	}
-	c.recorder.Event(ing, apiv1.EventTypeNormal, "Updated", fmt.Sprintf("Successfully associated IP address %s to ingress %s", lb.Address, newIng.Name))
+	c.recorder.Event(ing, corev1.EventTypeNormal, "Updated", fmt.Sprintf("Successfully associated IP address %s to ingress %s", lb.Address, newIng.Name))
 	return newObj, nil
 }
 

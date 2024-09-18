@@ -17,7 +17,7 @@ import (
 	lListenerV2 "github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	lLoadBalancerV2 "github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	lPoolV2 "github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,7 +32,7 @@ type MyDuration struct {
 }
 
 // PatchService makes patch request to the Service object.
-func PatchService(ctx context.Context, client clientset.Interface, cur, mod *apiv1.Service) error {
+func PatchService(ctx context.Context, client clientset.Interface, cur, mod *corev1.Service) error {
 	curJSON, err := json.Marshal(cur)
 	if err != nil {
 		return fmt.Errorf("failed to serialize current service object: %s", err)
@@ -43,7 +43,7 @@ func PatchService(ctx context.Context, client clientset.Interface, cur, mod *api
 		return fmt.Errorf("failed to serialize modified service object: %s", err)
 	}
 
-	patch, err := strategicpatch.CreateTwoWayMergePatch(curJSON, modJSON, apiv1.Service{})
+	patch, err := strategicpatch.CreateTwoWayMergePatch(curJSON, modJSON, corev1.Service{})
 	if err != nil {
 		return fmt.Errorf("failed to create 2-way merge patch: %s", err)
 	}
@@ -60,7 +60,7 @@ func PatchService(ctx context.Context, client clientset.Interface, cur, mod *api
 	return nil
 }
 
-func IsPoolProtocolValid(pPool *lObjects.Pool, pPort apiv1.ServicePort, pPoolName string) bool {
+func IsPoolProtocolValid(pPool *lObjects.Pool, pPort corev1.ServicePort, pPoolName string) bool {
 	if pPool != nil &&
 		!lStr.EqualFold(lStr.TrimSpace(pPool.Protocol), lStr.TrimSpace(string(pPort.Protocol))) &&
 		pPoolName == pPool.Name {
@@ -77,8 +77,8 @@ func MinInt(a, b int) int {
 	return b
 }
 
-func ListWorkerNodes(pNodes []*apiv1.Node, pOnlyReadyNode bool) []*apiv1.Node {
-	var workerNodes []*apiv1.Node
+func ListWorkerNodes(pNodes []*corev1.Node, pOnlyReadyNode bool) []*corev1.Node {
+	var workerNodes []*corev1.Node
 
 	for _, node := range pNodes {
 		// Ignore master nodes
@@ -99,7 +99,7 @@ func ListWorkerNodes(pNodes []*apiv1.Node, pOnlyReadyNode bool) []*apiv1.Node {
 
 		// Only consider ready nodes
 		for _, condition := range node.Status.Conditions {
-			if condition.Type == apiv1.NodeReady && condition.Status != apiv1.ConditionTrue {
+			if condition.Type == corev1.NodeReady && condition.Status != corev1.ConditionTrue {
 				continue
 			}
 		}
@@ -136,7 +136,7 @@ func ParsePoolProtocol(pPoolProtocol string) lPoolV2.CreateOptsProtocolOpt {
 }
 
 func ParseMonitorProtocol(
-	pPoolProtocol apiv1.Protocol, pMonitorProtocol string) lPoolV2.CreateOptsHealthCheckProtocolOpt {
+	pPoolProtocol corev1.Protocol, pMonitorProtocol string) lPoolV2.CreateOptsHealthCheckProtocolOpt {
 
 	switch lStr.TrimSpace(lStr.ToUpper(string(pPoolProtocol))) {
 	case string(lPoolV2.CreateOptsProtocolOptUDP):
@@ -189,7 +189,7 @@ func ParseLoadBalancerScheme(pInternal bool) lLoadBalancerV2.CreateOptsSchemeOpt
 	return lLoadBalancerV2.CreateOptsSchemeOptInternet
 }
 
-func ParseListenerProtocol(pPort apiv1.ServicePort) lListenerV2.CreateOptsListenerProtocolOpt {
+func ParseListenerProtocol(pPort corev1.ServicePort) lListenerV2.CreateOptsListenerProtocolOpt {
 	opt := lStr.TrimSpace(lStr.ToUpper(string(pPort.Protocol)))
 	switch opt {
 	case string(lListenerV2.CreateOptsListenerProtocolOptUDP):
@@ -199,7 +199,7 @@ func ParseListenerProtocol(pPort apiv1.ServicePort) lListenerV2.CreateOptsListen
 	return lListenerV2.CreateOptsListenerProtocolOptTCP
 }
 
-func GetStringFromServiceAnnotation(pService *apiv1.Service, annotationKey string, defaultSetting string) string {
+func GetStringFromServiceAnnotation(pService *corev1.Service, annotationKey string, defaultSetting string) string {
 	klog.V(4).Infof("getStringFromServiceAnnotation(%s/%s, %v, %v)", pService.Namespace, pService.Name, annotationKey, defaultSetting)
 	if annotationValue, ok := pService.Annotations[annotationKey]; ok {
 		//if there is an annotation for this setting, set the "setting" var to it
@@ -217,7 +217,7 @@ func GetStringFromServiceAnnotation(pService *apiv1.Service, annotationKey strin
 	return defaultSetting
 }
 
-func GetIntFromServiceAnnotation(service *apiv1.Service, annotationKey string, defaultSetting int) int {
+func GetIntFromServiceAnnotation(service *corev1.Service, annotationKey string, defaultSetting int) int {
 	klog.V(4).Infof("getIntFromServiceAnnotation(%s/%s, %v, %v)", service.Namespace, service.Name, annotationKey, defaultSetting)
 	if annotationValue, ok := service.Annotations[annotationKey]; ok {
 		returnValue, err := strconv.Atoi(annotationValue)
@@ -297,14 +297,14 @@ func ParseStringMapAnnotation(s, annotation string) map[string]string {
 	return validStr
 }
 
-func ListNodeWithPredicate(nodeLister corelisters.NodeLister, nodeLabels map[string]string) ([]*apiv1.Node, error) {
+func ListNodeWithPredicate(nodeLister corelisters.NodeLister, nodeLabels map[string]string) ([]*corev1.Node, error) {
 	labelSelector := labels.SelectorFromSet(nodeLabels)
 	nodes, err := nodeLister.List(labelSelector)
 	if err != nil {
 		return nil, err
 	}
 
-	var filtered []*apiv1.Node
+	var filtered []*corev1.Node
 	for i := range nodes {
 		if getNodeConditionPredicate(nodes[i]) {
 			filtered = append(filtered, nodes[i])
@@ -315,8 +315,8 @@ func ListNodeWithPredicate(nodeLister corelisters.NodeLister, nodeLabels map[str
 }
 
 // FilterByNodeLabel filters the given list of nodes by the given node labels.
-func FilterByNodeLabel(nodes []*apiv1.Node, nodeLabels map[string]string) []*apiv1.Node {
-	var filtered []*apiv1.Node
+func FilterByNodeLabel(nodes []*corev1.Node, nodeLabels map[string]string) []*corev1.Node {
+	var filtered []*corev1.Node
 	for _, node := range nodes {
 		if node == nil {
 			continue
@@ -331,7 +331,7 @@ func FilterByNodeLabel(nodes []*apiv1.Node, nodeLabels map[string]string) []*api
 	return filtered
 }
 
-func getNodeConditionPredicate(node *apiv1.Node) bool {
+func getNodeConditionPredicate(node *corev1.Node) bool {
 	// We add the master to the node list, but its unschedulable.  So we use this to filter
 	// the master.
 	if node.Spec.Unschedulable {
@@ -355,7 +355,7 @@ func getNodeConditionPredicate(node *apiv1.Node) bool {
 	// for _, cond := range node.Status.Conditions {
 	// 	// We consider the node for load balancing only when its NodeReady condition status
 	// 	// is ConditionTrue
-	// 	if cond.Type == apiv1.NodeReady && cond.Status != apiv1.ConditionTrue {
+	// 	if cond.Type == corev1.NodeReady && cond.Status != corev1.ConditionTrue {
 	// 		klog.Info("ignoring node:", "name", node.Name, "status", cond.Status)
 	// 		// log.WithFields(log.Fields{"name": node.Name, "status": cond.Status}).Info("ignoring node")
 	// 		return false
@@ -363,13 +363,13 @@ func getNodeConditionPredicate(node *apiv1.Node) bool {
 	// }
 	return true
 }
-func ListServiceWithPredicate(serviceLister corelisters.ServiceLister) ([]*apiv1.Service, error) {
+func ListServiceWithPredicate(serviceLister corelisters.ServiceLister) ([]*corev1.Service, error) {
 	services, err := serviceLister.List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 
-	var filtered []*apiv1.Service
+	var filtered []*corev1.Service
 	for i := range services {
 		if getServiceConditionPredicate(services[i]) {
 			filtered = append(filtered, services[i])
@@ -378,9 +378,9 @@ func ListServiceWithPredicate(serviceLister corelisters.ServiceLister) ([]*apiv1
 
 	return filtered, nil
 }
-func getServiceConditionPredicate(service *apiv1.Service) bool {
+func getServiceConditionPredicate(service *corev1.Service) bool {
 	// We only consider services with type LoadBalancer
-	return service.Spec.Type == apiv1.ServiceTypeLoadBalancer
+	return service.Spec.Type == corev1.ServiceTypeLoadBalancer
 }
 
 // providerID
@@ -395,7 +395,7 @@ var (
 	vngCloudProviderIDRegex = regexp.MustCompile(pattern)
 )
 
-func GetListProviderID(pnodes []*apiv1.Node) []string {
+func GetListProviderID(pnodes []*corev1.Node) []string {
 	var providerIDs []string
 	for _, node := range pnodes {
 		if node != nil && (matchCloudProviderPattern(node.Spec.ProviderID)) {
@@ -410,7 +410,7 @@ func matchCloudProviderPattern(pproviderID string) bool {
 	return vngCloudProviderIDRegex.MatchString(pproviderID)
 }
 
-func getProviderID(pnode *apiv1.Node) string {
+func getProviderID(pnode *corev1.Node) string {
 	return pnode.Spec.ProviderID[len(rawPrefix):len(pnode.Spec.ProviderID)]
 }
 

@@ -22,7 +22,7 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
-	lCoreV1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -67,9 +67,9 @@ type (
 		kubeClient    kubernetes.Interface
 		eventRecorder record.EventRecorder
 		vLbConfig     VLbOpts
-		serviceCache  map[string]*lCoreV1.Service
+		serviceCache  map[string]*corev1.Service
 
-		knownNodes           []*lCoreV1.Node
+		knownNodes           []*corev1.Node
 		serviceLister        corelisters.ServiceLister
 		serviceListerSynced  cache.InformerSynced
 		endpointLister       corelisters.EndpointsLister
@@ -115,7 +115,7 @@ func (c *vLB) Init() {
 	endpointInformer := kubeInformerFactory.Core().V1().Endpoints()
 	_, err := endpointInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			object := obj.(*lCoreV1.Endpoints)
+			object := obj.(*corev1.Endpoints)
 			requests := c.resourceDependant.GetServiceNeedReconcile("endpoint", object.GetNamespace(), object.GetName())
 			if len(requests) == 0 {
 				return
@@ -133,8 +133,8 @@ func (c *vLB) Init() {
 			}
 		},
 		UpdateFunc: func(old, new interface{}) {
-			objectOld := old.(*lCoreV1.Endpoints)
-			objectNew := new.(*lCoreV1.Endpoints)
+			objectOld := old.(*corev1.Endpoints)
+			objectNew := new.(*corev1.Endpoints)
 			if reflect.DeepEqual(objectOld.Subsets, objectNew.Subsets) {
 				return
 			}
@@ -182,18 +182,18 @@ func (c *vLB) Init() {
 
 // ****************************** IMPLEMENTATIONS OF KUBERNETES CLOUD PROVIDER INTERFACE *******************************
 
-func (c *vLB) GetLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
+func (c *vLB) GetLoadBalancer(pCtx context.Context, clusterName string, pService *corev1.Service) (*corev1.LoadBalancerStatus, bool, error) {
 	mc := lMetrics.NewMetricContext("loadbalancer", "ensure")
 	klog.InfoS("GetLoadBalancer", "cluster", clusterName, "service", klog.KObj(pService))
 	status, existed, err := c.ensureGetLoadBalancer(pCtx, clusterName, pService)
 	return status, existed, mc.ObserveReconcile(err)
 }
 
-func (c *vLB) GetLoadBalancerName(_ context.Context, clusterName string, pService *lCoreV1.Service) string {
+func (c *vLB) GetLoadBalancerName(_ context.Context, clusterName string, pService *corev1.Service) string {
 	return utils.GenerateLBName(c.getClusterID(), pService.Namespace, pService.Name, consts.RESOURCE_TYPE_SERVICE)
 }
 
-func (c *vLB) EnsureLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*lCoreV1.LoadBalancerStatus, error) {
+func (c *vLB) EnsureLoadBalancer(pCtx context.Context, clusterName string, pService *corev1.Service, pNodes []*corev1.Node) (*corev1.LoadBalancerStatus, error) {
 	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
 	c.stringKeyLock.Lock(key)
 	defer c.stringKeyLock.Unlock(key)
@@ -211,7 +211,7 @@ func (c *vLB) EnsureLoadBalancer(pCtx context.Context, clusterName string, pServ
 
 // UpdateLoadBalancer updates hosts under the specified load balancer. This will be executed when user add or remove nodes
 // from the cluster
-func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) error {
+func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pService *corev1.Service, pNodes []*corev1.Node) error {
 	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
 	c.stringKeyLock.Lock(key)
 	defer c.stringKeyLock.Unlock(key)
@@ -233,7 +233,7 @@ func (c *vLB) UpdateLoadBalancer(pCtx context.Context, clusterName string, pServ
 	return mc.ObserveReconcile(err)
 }
 
-func (c *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string, pService *lCoreV1.Service) error {
+func (c *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string, pService *corev1.Service) error {
 	key := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
 	c.stringKeyLock.Lock(key)
 	defer c.stringKeyLock.Unlock(key)
@@ -248,8 +248,8 @@ func (c *vLB) EnsureLoadBalancerDeleted(pCtx context.Context, clusterName string
 // ************************************************** PRIVATE METHODS **************************************************
 
 func (c *vLB) ensureLoadBalancer(
-	pCtx context.Context, _ string, pService *lCoreV1.Service, pNodes []*lCoreV1.Node) ( // params
-	rLb *lCoreV1.LoadBalancerStatus, rErr error) { // returns
+	pCtx context.Context, _ string, pService *corev1.Service, pNodes []*corev1.Node) ( // params
+	rLb *corev1.LoadBalancerStatus, rErr error) { // returns
 
 	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
@@ -306,7 +306,7 @@ func (c *vLB) ensureLoadBalancer(
 	return lbStatus, nil
 }
 
-func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.LoadBalancer) *lCoreV1.LoadBalancerStatus {
+func (c *vLB) createLoadBalancerStatus(pService *corev1.Service, lb *lObjects.LoadBalancer) *corev1.LoadBalancerStatus {
 	if pService == nil {
 		klog.Warningln("can't createLoadBalancerStatus, service is nil")
 		return nil
@@ -317,12 +317,12 @@ func (c *vLB) createLoadBalancerStatus(pService *lCoreV1.Service, lb *lObjects.L
 	pService.ObjectMeta.Annotations[ServiceAnnotationLoadBalancerID] = lb.UUID
 	delete(pService.ObjectMeta.Annotations, ServiceAnnotationLoadBalancerName)
 
-	status := &lCoreV1.LoadBalancerStatus{}
+	status := &corev1.LoadBalancerStatus{}
 	addr := net.ParseIP(lb.Address)
 	if addr != nil {
-		status.Ingress = []lCoreV1.LoadBalancerIngress{{IP: lb.Address}}
+		status.Ingress = []corev1.LoadBalancerIngress{{IP: lb.Address}}
 	} else {
-		status.Ingress = []lCoreV1.LoadBalancerIngress{{Hostname: lb.Address}}
+		status.Ingress = []corev1.LoadBalancerIngress{{Hostname: lb.Address}}
 	}
 	return status
 }
@@ -331,7 +331,7 @@ func (c *vLB) getProjectID() string {
 	return c.extraInfo.ProjectID
 }
 
-func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *lCoreV1.Service) error {
+func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *corev1.Service) error {
 	c.resourceDependant.ClearService(pService.Namespace, pService.Name)
 	if option, ok := pService.Annotations[ServiceAnnotationIgnore]; ok {
 		if isIgnore := utils.ParseBoolAnnotation(option, ServiceAnnotationIgnore, false); isIgnore {
@@ -438,7 +438,7 @@ func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *lC
 	return nil
 }
 
-func (c *vLB) ensureGetLoadBalancer(_ context.Context, _ string, pService *lCoreV1.Service) (*lCoreV1.LoadBalancerStatus, bool, error) {
+func (c *vLB) ensureGetLoadBalancer(_ context.Context, _ string, pService *corev1.Service) (*corev1.LoadBalancerStatus, bool, error) {
 	lbID, _ := c.GetLoadbalancerIDByService(pService)
 	if lbID == "" {
 		klog.Infof("Load balancer is not existed")
@@ -519,7 +519,7 @@ func (c *vLB) getClusterID() string {
 	return c.config.Cluster.ClusterID
 }
 
-func (c *vLB) inspectService(pService *lCoreV1.Service, pNodes []*lCoreV1.Node) (*Expander, error) {
+func (c *vLB) inspectService(pService *corev1.Service, pNodes []*corev1.Node) (*Expander, error) {
 	if pService == nil {
 		return &Expander{
 			serviceConf: NewServiceConfig(nil),
@@ -756,7 +756,7 @@ func (c *vLB) ensureLoadBalancerInstance(inspect *Expander) (string, error) {
 	return inspect.serviceConf.LoadBalancerID, nil
 }
 
-func (c *vLB) GetLoadbalancerIDByService(pService *lCoreV1.Service) (string, error) {
+func (c *vLB) GetLoadbalancerIDByService(pService *corev1.Service) (string, error) {
 	lbsInSubnet, err := vngcloudutil.ListLB(c.vLBSC, c.getProjectID())
 	if err != nil {
 		klog.Errorf("error when list lb by subnet id: %v", err)

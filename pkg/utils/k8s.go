@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/errors"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	nwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -60,7 +60,7 @@ func GetIngress(ingressLister nwlisters.IngressLister, key string) (*nwv1.Ingres
 	return ingress, nil
 }
 
-func GetService(serviceLister corelisters.ServiceLister, key string) (*apiv1.Service, error) {
+func GetService(serviceLister corelisters.ServiceLister, key string) (*corev1.Service, error) {
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func GetServiceNodePort(serviceLister corelisters.ServiceLister, name string, se
 	return targetPort, nodePort, nil
 }
 
-func GetNodeMembersAddr(nodeObjs []*apiv1.Node) []string {
+func GetNodeMembersAddr(nodeObjs []*corev1.Node) []string {
 	var nodeAddr []string
 	for _, node := range nodeObjs {
 		addr, err := getNodeAddressForLB(node)
@@ -126,14 +126,14 @@ func GetNodeMembersAddr(nodeObjs []*apiv1.Node) []string {
 	return nodeAddr
 }
 
-func getNodeAddressForLB(node *apiv1.Node) (string, error) {
+func getNodeAddressForLB(node *corev1.Node) (string, error) {
 	addrs := node.Status.Addresses
 	if len(addrs) == 0 {
 		return "", errors.NewErrNodeAddressNotFound(node.Name, "")
 	}
 
 	for _, addr := range addrs {
-		if addr.Type == apiv1.NodeInternalIP {
+		if addr.Type == corev1.NodeInternalIP {
 			return addr.Address, nil
 		}
 	}
@@ -142,7 +142,7 @@ func getNodeAddressForLB(node *apiv1.Node) (string, error) {
 }
 
 // NodeNames get all the node names.
-func NodeNames(nodes []*apiv1.Node) []string {
+func NodeNames(nodes []*corev1.Node) []string {
 	ret := make([]string, len(nodes))
 	for i, node := range nodes {
 		ret[i] = node.Name
@@ -151,7 +151,7 @@ func NodeNames(nodes []*apiv1.Node) []string {
 }
 
 // NodeSlicesEqual check if two nodes equals to each other.
-func NodeSlicesEqual(x, y []*apiv1.Node) bool {
+func NodeSlicesEqual(x, y []*corev1.Node) bool {
 	if len(x) != len(y) {
 		return false
 	}

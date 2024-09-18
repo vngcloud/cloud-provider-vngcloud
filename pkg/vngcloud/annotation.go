@@ -2,12 +2,13 @@ package vngcloud
 
 import (
 	"fmt"
+
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 )
 
@@ -108,7 +109,7 @@ type ServiceConfig struct {
 	TargetType                 TargetType
 }
 
-func NewServiceConfig(pService *apiv1.Service) *ServiceConfig {
+func NewServiceConfig(pService *corev1.Service) *ServiceConfig {
 	opt := &ServiceConfig{
 		LoadBalancerID:             "",
 		LoadBalancerName:           "",
@@ -294,7 +295,7 @@ func (s *ServiceConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
 	return opt
 }
 
-func (s *ServiceConfig) CreateListenerOptions(pPort apiv1.ServicePort) *listener.CreateOpts {
+func (s *ServiceConfig) CreateListenerOptions(pPort corev1.ServicePort) *listener.CreateOpts {
 	opt := &listener.CreateOpts{
 		ListenerName:                "",
 		ListenerProtocol:            utils.ParseListenerProtocol(pPort),
@@ -311,7 +312,7 @@ func (s *ServiceConfig) CreateListenerOptions(pPort apiv1.ServicePort) *listener
 	return opt
 }
 
-func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateOpts {
+func (s *ServiceConfig) CreatePoolOptions(pPort corev1.ServicePort) *pool.CreateOpts {
 	healthMonitor := pool.HealthMonitor{
 		HealthyThreshold:    s.HealthyThresholdCount,
 		UnhealthyThreshold:  s.UnhealthyThresholdCount,
@@ -344,7 +345,7 @@ func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateO
 		Members:       []*pool.Member{},
 	}
 	for _, name := range s.EnableProxyProtocol {
-		if (name == "*" || name == pPort.Name) && pPort.Protocol == apiv1.ProtocolTCP {
+		if (name == "*" || name == pPort.Name) && pPort.Protocol == corev1.ProtocolTCP {
 			opt.PoolProtocol = pool.CreateOptsProtocolOptProxy
 			break
 		}
@@ -352,16 +353,16 @@ func (s *ServiceConfig) CreatePoolOptions(pPort apiv1.ServicePort) *pool.CreateO
 	return opt
 }
 
-func (s *ServiceConfig) MappingProtocol(pPort apiv1.ServicePort) string {
+func (s *ServiceConfig) MappingProtocol(pPort corev1.ServicePort) string {
 	for _, name := range s.EnableProxyProtocol {
-		if (name == "*" || name == pPort.Name) && pPort.Protocol == apiv1.ProtocolTCP {
+		if (name == "*" || name == pPort.Name) && pPort.Protocol == corev1.ProtocolTCP {
 			return string(pool.CreateOptsProtocolOptProxy)
 		}
 	}
 	return string(pPort.Protocol)
 }
 
-func (s *ServiceConfig) GenListenerName(clusterName string, pService *apiv1.Service, resourceType string, pPort apiv1.ServicePort) string {
+func (s *ServiceConfig) GenListenerName(clusterName string, pService *corev1.Service, resourceType string, pPort corev1.ServicePort) string {
 	hash := utils.GenerateHashName(clusterName, pService.Namespace, pService.Name, resourceType)
 	name := fmt.Sprintf("%s_%s_%s_%s_%s_%s_%d",
 		consts.DEFAULT_LB_PREFIX_NAME,
@@ -374,7 +375,7 @@ func (s *ServiceConfig) GenListenerName(clusterName string, pService *apiv1.Serv
 	return utils.ValidateName(name)
 }
 
-func (s *ServiceConfig) GenPoolName(clusterName string, pService *apiv1.Service, resourceType string, pPort apiv1.ServicePort) string {
+func (s *ServiceConfig) GenPoolName(clusterName string, pService *corev1.Service, resourceType string, pPort corev1.ServicePort) string {
 	realProtocol := s.MappingProtocol(pPort)
 
 	hash := utils.GenerateHashName(clusterName, pService.Namespace, pService.Name, resourceType)

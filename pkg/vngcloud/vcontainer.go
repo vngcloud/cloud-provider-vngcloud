@@ -9,7 +9,7 @@ import (
 	vngcloudutil "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/vngcloud"
 	vconSdkClient "github.com/vngcloud/vngcloud-go-sdk/client"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud"
-	lCoreV1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -45,7 +45,7 @@ func (s *VContainer) Initialize(clientBuilder lcloudProvider.ControllerClientBui
 	s.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: s.kubeClient.CoreV1().Events("")})
 	s.eventRecorder = s.eventBroadcaster.NewRecorder(
 		scheme.Scheme,
-		lCoreV1.EventSource{Component: fmt.Sprintf("cloud-provider-%s", consts.PROVIDER_NAME)})
+		corev1.EventSource{Component: fmt.Sprintf("cloud-provider-%s", consts.PROVIDER_NAME)})
 }
 
 func (s *VContainer) LoadBalancer() (lcloudProvider.LoadBalancer, bool) {
@@ -69,9 +69,9 @@ func (s *VContainer) LoadBalancer() (lcloudProvider.LoadBalancer, bool) {
 		vLbConfig:         s.vLbOpts,
 		config:            s.config,
 		trackLBUpdate:     utils.NewUpdateTracker(),
-		serviceCache:      make(map[string]*lCoreV1.Service),
+		serviceCache:      make(map[string]*corev1.Service),
 		isReApplyNextTime: false,
-		knownNodes:        []*lCoreV1.Node{},
+		knownNodes:        []*corev1.Node{},
 	}
 	go lb.Init()
 	s.vlb = lb
