@@ -44,6 +44,7 @@ const (
 	ServiceAnnotationTags             = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/tags"
 	ServiceAnnotationScheme           = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/scheme"
 	ServiceAnnotationEnableAutoscale  = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-autoscale"
+	ServiceAnnotationIsPoc            = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/is-poc"
 
 	// // Listener annotations
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
@@ -107,6 +108,7 @@ type ServiceConfig struct {
 	EnableProxyProtocol        []string
 	EnableAutoscale            bool
 	TargetType                 TargetType
+	IsPoc                      bool
 }
 
 func NewServiceConfig(pService *corev1.Service) *ServiceConfig {
@@ -138,6 +140,7 @@ func NewServiceConfig(pService *corev1.Service) *ServiceConfig {
 		SecurityGroups:             []string{},
 		EnableProxyProtocol:        []string{},
 		EnableAutoscale:            false,
+		IsPoc:                      false,
 	}
 	if pService == nil {
 		return opt
@@ -280,6 +283,9 @@ func NewServiceConfig(pService *corev1.Service) *ServiceConfig {
 			klog.Warningf("Invalid annotation \"%s\" value, must be \"%s\" or \"%s\"", ServiceAnnotationTargetType, string(TargetTypeInstance), string(TargetTypeIP))
 		}
 	}
+	if option, ok := pService.Annotations[ServiceAnnotationIsPoc]; ok {
+		opt.IsPoc = utils.ParseBoolAnnotation(option, ServiceAnnotationIsPoc, opt.IsPoc)
+	}
 	return opt
 }
 
@@ -291,6 +297,7 @@ func (s *ServiceConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
 		SubnetID:     "",
 		Type:         s.LoadBalancerType,
 		AutoScalable: s.EnableAutoscale,
+		IsPoc:        s.IsPoc,
 	}
 	return opt
 }

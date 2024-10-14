@@ -43,6 +43,7 @@ const (
 	ServiceAnnotationScheme           = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/scheme"
 	ServiceAnnotationCertificateIDs   = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/certificate-ids"
 	ServiceAnnotationEnableAutoscale  = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/enable-autoscale"
+	ServiceAnnotationIsPoc            = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/is-poc"
 
 	// Listener annotations
 	ServiceAnnotationIdleTimeoutClient     = DEFAULT_K8S_SERVICE_ANNOTATION_PREFIX + "/idle-timeout-client"     // both annotation and cloud-config
@@ -107,6 +108,7 @@ type IngressConfig struct {
 	CertificateIDs             []string
 	EnableAutoscale            bool
 	TargetType                 TargetType
+	IsPoc                      bool
 }
 
 func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
@@ -141,6 +143,7 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 		CertificateIDs:             []string{},
 		EnableAutoscale:            false,
 		TargetType:                 TargetTypeInstance,
+		IsPoc:                      false,
 	}
 	if pService == nil {
 		return opt
@@ -299,6 +302,9 @@ func NewIngressConfig(pService *nwv1.Ingress) *IngressConfig {
 			klog.Warningf("Invalid annotation \"%s\" value, must be \"%s\" or \"%s\"", ServiceAnnotationTargetType, string(TargetTypeInstance), string(TargetTypeIP))
 		}
 	}
+	if option, ok := pService.Annotations[ServiceAnnotationIsPoc]; ok {
+		opt.IsPoc = utils.ParseBoolAnnotation(option, ServiceAnnotationIsPoc, opt.IsPoc)
+	}
 	return opt
 }
 
@@ -310,6 +316,7 @@ func (s *IngressConfig) CreateLoadbalancerOptions() *loadbalancer.CreateOpts {
 		SubnetID:     "",
 		Type:         s.LoadBalancerType,
 		AutoScalable: s.EnableAutoscale,
+		IsPoc:        s.IsPoc,
 	}
 	return opt
 }

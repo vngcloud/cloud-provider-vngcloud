@@ -7,11 +7,13 @@ toolchain go1.22.4
 require (
 	github.com/cuongpiger/joat v1.0.9
 	github.com/mitchellh/go-homedir v1.1.0
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.18.2
-	github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20240815093737-8907a96f9716
+	github.com/stretchr/testify v1.9.0
+	github.com/vngcloud/vngcloud-go-sdk v1.0.14-0.20241011061158-323134cc8f32
 	gopkg.in/gcfg.v1 v1.2.3
 	k8s.io/api v0.31.0
 	k8s.io/apimachinery v0.31.0
@@ -76,7 +78,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/onsi/ginkgo/v2 v2.19.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_golang v1.19.1 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
