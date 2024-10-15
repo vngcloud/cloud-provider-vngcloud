@@ -12,7 +12,9 @@ import (
 	cuongpigerutils "github.com/cuongpiger/joat/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/client"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/cni_detector"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/endpoint_resolver"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/ingress/config"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	vErrors "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/errors"
@@ -30,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	nwv1 "k8s.io/api/networking/v1"
 	apimetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -101,6 +104,11 @@ type Controller struct {
 	workers map[string]chan bool
 
 	resourceDependant utils.ResourceDependant
+	endpointResolver  endpoint_resolver.EndpointResolver
+	cniType           cni_detector.CNIType
+
+	// store to delete redundant loadbalancer resources
+	cacheLoadBalancerBuilder map[string]*Expander
 }
 
 // NewController creates a new VngCloud Ingress controller.
@@ -131,21 +139,31 @@ func NewController(conf config.Config) *Controller {
 		config:     &conf,
 		kubeClient: kubeClient,
 
-		queue:               queue,
-		stopCh:              make(chan struct{}),
-		informer:            kubeInformerFactory,
-		recorder:            recorder,
-		serviceLister:       serviceInformer.Lister(),
-		serviceListerSynced: serviceInformer.Informer().HasSynced,
-		nodeLister:          nodeInformer.Lister(),
-		nodeListerSynced:    nodeInformer.Informer().HasSynced,
-		knownNodes:          []*corev1.Node{},
-		trackLBUpdate:       utils.NewUpdateTracker(),
-		numOfUpdatingThread: 0,
-		queues:              make(map[string][]interface{}),
-		workers:             make(map[string]chan bool),
-		resourceDependant:   utils.NewResourceDependant(),
+		queue:                    queue,
+		stopCh:                   make(chan struct{}),
+		informer:                 kubeInformerFactory,
+		recorder:                 recorder,
+		serviceLister:            serviceInformer.Lister(),
+		serviceListerSynced:      serviceInformer.Informer().HasSynced,
+		nodeLister:               nodeInformer.Lister(),
+		nodeListerSynced:         nodeInformer.Informer().HasSynced,
+		knownNodes:               []*corev1.Node{},
+		trackLBUpdate:            utils.NewUpdateTracker(),
+		numOfUpdatingThread:      0,
+		queues:                   make(map[string][]interface{}),
+		workers:                  make(map[string]chan bool),
+		resourceDependant:        utils.NewResourceDependant(),
+		endpointResolver:         nil,
+		cniType:                  cni_detector.UnknownCNI,
+		cacheLoadBalancerBuilder: make(map[string]*Expander),
 	}
+
+	controller.cniType, err = cni_detector.NewDetector(controller.kubeClient).DetectCNIType()
+	if err != nil {
+		klog.Errorf("failed to detect CNI type: %v", err)
+		controller.cniType = cni_detector.UnknownCNI
+	}
+	klog.Infof("Detected CNI type: %s", controller.cniType)
 
 	ingInformer := kubeInformerFactory.Networking().V1().Ingresses()
 	_, err = ingInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -276,6 +294,7 @@ func NewController(conf config.Config) *Controller {
 	controller.endpointLister = endpointInformer.Lister()
 	controller.endpointListerSynced = endpointInformer.Informer().HasSynced
 
+	controller.endpointResolver = endpoint_resolver.NewDefaultEndpointResolver(controller.serviceLister, controller.endpointLister)
 	return controller
 }
 
@@ -702,9 +721,14 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 		return err
 	}
 
-	oldIngExpander, err := c.inspectIngress(ing)
-	if err != nil {
-		oldIngExpander, _ = c.inspectIngress(nil)
+	var oldIngExpander *Expander
+	var ok bool
+	if oldIngExpander, ok = c.cacheLoadBalancerBuilder[fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)]; !ok {
+		// build again
+		oldIngExpander, err = c.inspectIngress(ing)
+		if err != nil {
+			oldIngExpander, _ = c.inspectIngress(nil)
+		}
 	}
 	newIngExpander, err := c.inspectIngress(nil)
 	if err != nil {
@@ -789,6 +813,7 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 			klog.Errorln("error when delete lb", err)
 			return err
 		}
+		delete(c.cacheLoadBalancerBuilder, fmt.Sprintf("%s/%s", ing.Namespace, ing.Name))
 		return nil
 	}
 
@@ -797,6 +822,7 @@ func (c *Controller) DeleteLoadbalancer(ing *nwv1.Ingress) error {
 		klog.Errorln("error when compare ingress", err)
 		return err
 	}
+	delete(c.cacheLoadBalancerBuilder, fmt.Sprintf("%s/%s", ing.Namespace, ing.Name))
 	return nil
 }
 
@@ -932,7 +958,6 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		klog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
 		return nil, err
 	}
-	membersAddr := utils.GetNodeMembersAddr(nodesAfterFilter)
 
 	// get subnetID of this ingress
 	providerIDs := utils.GetListProviderID(nodesAfterFilter)
@@ -979,68 +1004,70 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 		serviceKey := fmt.Sprintf("%s/%s", ing.ObjectMeta.Namespace, service.Name)
 		poolName := utils.GeneratePoolName(c.getClusterID(), ing.Namespace, ing.Name, consts.RESOURCE_TYPE_INGRESS,
 			serviceKey, int(service.Port.Number))
-		targetPort, nodePort, err := utils.GetServiceNodePort(c.serviceLister, serviceKey, service)
 		if err != nil {
 			klog.Errorf("error when get node port: %v", err)
 			return nil, err
 		}
 
-		monitorPort := nodePort
-		if serviceConf.HealthcheckPort != 0 {
-			monitorPort = serviceConf.HealthcheckPort
-			if serviceConf.IsAutoCreateSecurityGroup {
-				ingressInspect.AddSecgroupRule(monitorPort, secgroup_rule.CreateOptsProtocolOptTCP)
+		members := make([]*pool.Member, 0)
+		var membersAddr []endpoint_resolver.EndpointAddress
+		serviceIntOrStrPort := c.endpointResolver.ServiceBackendToIntOrString(service.Port)
+
+		// add security group rule for each target port, cilium native routing need to open these ports
+		if serviceConf.IsAutoCreateSecurityGroup && c.cniType == cni_detector.CiliumNativeRouting {
+			// get list target port
+			serviceTagetPortList, err := c.endpointResolver.GetListTargetPort(types.NamespacedName{Namespace: ing.Namespace, Name: service.Name},
+				serviceIntOrStrPort)
+			if err != nil {
+				klog.Errorf("error when get list target port: %v", err)
+				return nil, err
+			}
+			for _, targetPort := range serviceTagetPortList {
+				ingressInspect.AddSecgroupRule(targetPort, secgroup_rule.CreateOptsProtocolOptTCP)
 			}
 		}
 
-		members := make([]*pool.Member, 0)
+		// resolve add memeber
 		if serviceConf.TargetType == TargetTypeIP {
-			endpoints, err := c.endpointLister.Endpoints(ing.Namespace).Get(service.Name)
+			membersAddr, err = c.endpointResolver.ResolvePodEndpoints(
+				types.NamespacedName{Namespace: ing.Namespace, Name: service.Name},
+				serviceIntOrStrPort)
 			if err != nil {
-				klog.Errorf("Failed to get endpoints: %v", err)
+				klog.Errorf("error when resolve pod endpoints: %v", err)
 				return nil, err
 			}
-			for _, subset := range endpoints.Subsets {
-				for _, addr := range subset.Addresses {
-					members = append(members, &pool.Member{
-						IpAddress:   addr.IP,
-						Port:        targetPort,
-						Backup:      false,
-						Weight:      1,
-						Name:        addr.TargetRef.Name,
-						MonitorPort: targetPort,
-					})
-				}
-				for _, addr := range subset.NotReadyAddresses {
-					members = append(members, &pool.Member{
-						IpAddress:   addr.IP,
-						Port:        targetPort,
-						Backup:      false,
-						Weight:      1,
-						Name:        addr.TargetRef.Name,
-						MonitorPort: targetPort,
-					})
-				}
-			}
 		} else {
-			for _, addr := range membersAddr {
-				members = append(members, &pool.Member{
-					IpAddress:   addr,
-					Port:        nodePort,
-					Backup:      false,
-					Weight:      1,
-					Name:        poolName,
-					MonitorPort: monitorPort,
-				})
+			membersAddr, err = c.endpointResolver.ResolveNodePortEndpoints(
+				types.NamespacedName{Namespace: ing.Namespace, Name: service.Name},
+				serviceIntOrStrPort, nodesAfterFilter)
+			if err != nil {
+				klog.Errorf("error when resolve node endpoints: %v", err)
+				return nil, err
 			}
+		}
+		for _, addr := range membersAddr {
+			monitorPort := addr.Port
+			if serviceConf.HealthcheckPort != 0 {
+				monitorPort = serviceConf.HealthcheckPort
+			}
+
+			if serviceConf.IsAutoCreateSecurityGroup {
+				ingressInspect.AddSecgroupRule(monitorPort, secgroup_rule.CreateOptsProtocolOptTCP)
+			}
+
+			members = append(members, &pool.Member{
+				IpAddress:   addr.IP,
+				Port:        addr.Port,
+				Backup:      false,
+				Weight:      1,
+				Name:        addr.Name,
+				MonitorPort: monitorPort,
+			})
 		}
 		poolOptions := serviceConf.CreatePoolOptions()
 		poolOptions.PoolName = poolName
 		poolOptions.Members = members
 
-		if serviceConf.IsAutoCreateSecurityGroup {
-			ingressInspect.AddSecgroupRule(int(nodePort), secgroup_rule.CreateOptsProtocolOptTCP)
-		}
 		return &utils.PoolExpander{
 			UUID:       "",
 			CreateOpts: *poolOptions,
@@ -1136,10 +1163,12 @@ func (c *Controller) inspectIngress(ing *nwv1.Ingress) (*Expander, error) {
 	}, nil
 }
 
-func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.LoadBalancer, error) {
+func (c *Controller) ensureCompareIngress(_, ing *nwv1.Ingress) (*lObjects.LoadBalancer, error) {
 
-	oldIngExpander, err := c.inspectIngress(oldIng)
-	if err != nil {
+	var oldIngExpander *Expander
+	var ok bool
+	if oldIngExpander, ok = c.cacheLoadBalancerBuilder[fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)]; !ok {
+		// build again
 		oldIngExpander, _ = c.inspectIngress(nil)
 	}
 	newIngExpander, err := c.inspectIngress(ing)
@@ -1163,6 +1192,7 @@ func (c *Controller) ensureCompareIngress(oldIng, ing *nwv1.Ingress) (*lObjects.
 		klog.Errorln("error when compare ingress", err)
 		return nil, err
 	}
+	c.cacheLoadBalancerBuilder[fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)] = newIngExpander
 	c.resourceDependant.SetIngress(ing, newIngExpander.serviceConf.TargetType == TargetTypeIP)
 	return lb, nil
 }

@@ -11,7 +11,9 @@ import (
 
 	"github.com/sirupsen/logrus"
 	lSdkClient "github.com/vngcloud/cloud-provider-vngcloud/pkg/client"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/cni_detector"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/consts"
+	"github.com/vngcloud/cloud-provider-vngcloud/pkg/endpoint_resolver"
 	lMetrics "github.com/vngcloud/cloud-provider-vngcloud/pkg/metrics"
 	"github.com/vngcloud/cloud-provider-vngcloud/pkg/utils"
 	vErrors "github.com/vngcloud/cloud-provider-vngcloud/pkg/utils/errors"
@@ -22,7 +24,10 @@ import (
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/listener"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/loadbalancer"
 	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/loadbalancer/v2/pool"
+	"github.com/vngcloud/vngcloud-go-sdk/vngcloud/services/network/v2/extensions/secgroup_rule"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -67,7 +72,6 @@ type (
 		kubeClient    kubernetes.Interface
 		eventRecorder record.EventRecorder
 		vLbConfig     VLbOpts
-		serviceCache  map[string]*corev1.Service
 
 		knownNodes           []*corev1.Node
 		serviceLister        corelisters.ServiceLister
@@ -85,6 +89,11 @@ type (
 
 		stringKeyLock     *utils.StringKeyLock
 		resourceDependant utils.ResourceDependant
+		endpointResolver  endpoint_resolver.EndpointResolver
+		cniType           cni_detector.CNIType
+
+		// store to delete redundant loadbalancer resources
+		cacheLoadBalancerBuilder map[string]*Expander
 	}
 
 	// Config is the configuration for the VNG CLOUD load balancer controller,
@@ -111,9 +120,18 @@ func (c *vLB) Init() {
 	c.numOfUpdatingThread = 0
 	c.stringKeyLock = utils.NewStringKeyLock()
 	c.resourceDependant = utils.NewResourceDependant()
+	c.cacheLoadBalancerBuilder = make(map[string]*Expander)
+
+	var err error
+	c.cniType, err = cni_detector.NewDetector(c.kubeClient).DetectCNIType()
+	if err != nil {
+		klog.Errorf("failed to detect CNI type: %v", err)
+		c.cniType = cni_detector.UnknownCNI
+	}
+	klog.Infof("Detected CNI type: %s", c.cniType)
 
 	endpointInformer := kubeInformerFactory.Core().V1().Endpoints()
-	_, err := endpointInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err = endpointInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			object := obj.(*corev1.Endpoints)
 			requests := c.resourceDependant.GetServiceNeedReconcile("endpoint", object.GetNamespace(), object.GetName())
@@ -165,6 +183,8 @@ func (c *vLB) Init() {
 
 	c.endpointLister = endpointInformer.Lister()
 	c.endpointListerSynced = endpointInformer.Informer().HasSynced
+
+	c.endpointResolver = endpoint_resolver.NewDefaultEndpointResolver(c.serviceLister, c.endpointLister)
 
 	defer close(c.stopCh)
 	go c.informer.Start(c.stopCh)
@@ -265,9 +285,11 @@ func (c *vLB) ensureLoadBalancer(
 	}()
 
 	serviceKey := fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)
-	oldIngExpander, _ := c.inspectService(nil, pNodes)
-	if oldService, ok := c.serviceCache[serviceKey]; ok {
-		oldIngExpander, _ = c.inspectService(oldService, pNodes)
+	var oldIngExpander *Expander
+	var ok bool
+	if oldIngExpander, ok = c.cacheLoadBalancerBuilder[serviceKey]; !ok {
+		// build again
+		oldIngExpander, _ = c.inspectService(nil, pNodes)
 	}
 	newIngExpander, err := c.inspectService(pService, pNodes)
 	if err != nil {
@@ -296,7 +318,7 @@ func (c *vLB) ensureLoadBalancer(
 
 	userLb, _ := vngcloudutil.GetLB(c.vLBSC, c.getProjectID(), lb.UUID)
 	c.trackLBUpdate.AddUpdateTracker(userLb.UUID, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name), userLb.UpdatedAt)
-	c.serviceCache[serviceKey] = pService.DeepCopy()
+	c.cacheLoadBalancerBuilder[serviceKey] = newIngExpander
 
 	klog.Infof(
 		"Load balancer %s for service %s/%s is ready to use for Kubernetes controller\n----- DONE ----- ",
@@ -351,10 +373,16 @@ func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *co
 		return err
 	}
 
-	oldIngExpander, err := c.inspectService(pService, c.knownNodes)
-	if err != nil {
-		oldIngExpander, _ = c.inspectService(nil, c.knownNodes)
+	var oldIngExpander *Expander
+	var ok bool
+	if oldIngExpander, ok = c.cacheLoadBalancerBuilder[fmt.Sprintf("%s/%s", pService.Namespace, pService.Name)]; !ok {
+		// build again
+		oldIngExpander, err = c.inspectService(pService, c.knownNodes)
+		if err != nil {
+			oldIngExpander, _ = c.inspectService(nil, c.knownNodes)
+		}
 	}
+
 	newIngExpander, err := c.inspectService(nil, c.knownNodes)
 	if err != nil {
 		klog.Errorln("error when inspect new service:", err)
@@ -427,6 +455,7 @@ func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *co
 			klog.Errorln("error when delete lb", err)
 			return err
 		}
+		delete(c.cacheLoadBalancerBuilder, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name))
 		return nil
 	}
 
@@ -435,6 +464,7 @@ func (c *vLB) ensureDeleteLoadBalancer(_ context.Context, _ string, pService *co
 		klog.Errorln("error when compare service", err)
 		return err
 	}
+	delete(c.cacheLoadBalancerBuilder, fmt.Sprintf("%s/%s", pService.Namespace, pService.Name))
 	return nil
 }
 
@@ -566,7 +596,6 @@ func (c *vLB) inspectService(pService *corev1.Service, pNodes []*corev1.Node) (*
 		klog.Errorf("No nodes found in the cluster")
 		return nil, vErrors.ErrNoNodeAvailable
 	}
-	membersAddr := utils.GetNodeMembersAddr(nodesAfterFilter)
 
 	// get subnetID of this ingress
 	providerIDs := utils.GetListProviderID(pNodes)
@@ -603,74 +632,77 @@ func (c *vLB) inspectService(pService *corev1.Service, pNodes []*corev1.Node) (*
 		poolName := serviceConf.GenPoolName(c.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
 		listenerName := serviceConf.GenListenerName(c.getClusterID(), pService, consts.RESOURCE_TYPE_SERVICE, port)
 
-		monitorPort := int(port.NodePort)
 		if serviceConf.HealthcheckPort != 0 {
-			monitorPort = serviceConf.HealthcheckPort
 			if serviceConf.IsAutoCreateSecurityGroup {
-				ingressInspect.AddSecgroupRule(monitorPort,
+				ingressInspect.AddSecgroupRule(serviceConf.HealthcheckPort,
+					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
+				if strings.EqualFold(string(port.Protocol), "UDP") {
+					ingressInspect.AddSecgroupRule(serviceConf.HealthcheckPort,
+						vngcloudutil.HealthcheckProtocoToSecGroupProtocol("ICMP"))
+				}
+			}
+		}
+
+		var membersAddr []endpoint_resolver.EndpointAddress
+		members := make([]*pool.Member, 0)
+
+		// add security group rule for each target port, cilium native routing need to open these ports
+		if serviceConf.IsAutoCreateSecurityGroup && c.cniType == cni_detector.CiliumNativeRouting {
+			// get list target port
+			serviceTagetPortList, err := c.endpointResolver.GetListTargetPort(types.NamespacedName{Namespace: pService.Namespace, Name: pService.Name},
+				intstr.FromInt(int(port.Port)))
+			if err != nil {
+				klog.Errorf("error when get list target port: %v", err)
+				return nil, err
+			}
+			for _, targetPort := range serviceTagetPortList {
+				ingressInspect.AddSecgroupRule(targetPort, secgroup_rule.CreateOptsProtocolOptTCP)
+			}
+		}
+
+		// resolve add memeber
+		if serviceConf.TargetType == TargetTypeIP {
+			membersAddr, err = c.endpointResolver.ResolvePodEndpoints(
+				types.NamespacedName{Namespace: pService.Namespace, Name: pService.Name}, intstr.FromInt(int(port.Port)))
+			if err != nil {
+				klog.Errorf("Failed to resolve pod endpoints: %v", err)
+				return nil, err
+			}
+		} else {
+			membersAddr, err = c.endpointResolver.ResolveNodePortEndpoints(
+				types.NamespacedName{Namespace: pService.Namespace, Name: pService.Name}, intstr.FromInt(int(port.Port)), nodesAfterFilter)
+			if err != nil {
+				klog.Errorf("Failed to resolve node port endpoints: %v", err)
+				return nil, err
+			}
+		}
+		for _, addr := range membersAddr {
+			monitorPort := addr.Port
+			if serviceConf.HealthcheckPort != 0 {
+				monitorPort = serviceConf.HealthcheckPort
+			}
+
+			if serviceConf.IsAutoCreateSecurityGroup {
+				ingressInspect.AddSecgroupRule(addr.Port,
 					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
 				if strings.EqualFold(string(port.Protocol), "UDP") {
 					ingressInspect.AddSecgroupRule(monitorPort,
 						vngcloudutil.HealthcheckProtocoToSecGroupProtocol("ICMP"))
 				}
 			}
-		}
 
-		members := make([]*pool.Member, 0)
-		if serviceConf.TargetType == TargetTypeIP {
-			endpoints, err := c.endpointLister.Endpoints(pService.Namespace).Get(pService.Name)
-			if err != nil {
-				klog.Errorf("Failed to get endpoints: %v", err)
-				return nil, err
-			}
-			for _, subset := range endpoints.Subsets {
-				for _, addr := range subset.Addresses {
-					members = append(members, &pool.Member{
-						IpAddress:   addr.IP,
-						Port:        port.TargetPort.IntValue(),
-						Backup:      false,
-						Weight:      1,
-						Name:        addr.TargetRef.Name,
-						MonitorPort: port.TargetPort.IntValue(),
-					})
-				}
-				for _, addr := range subset.NotReadyAddresses {
-					members = append(members, &pool.Member{
-						IpAddress:   addr.IP,
-						Port:        port.TargetPort.IntValue(),
-						Backup:      false,
-						Weight:      1,
-						Name:        addr.TargetRef.Name,
-						MonitorPort: port.TargetPort.IntValue(),
-					})
-				}
-			}
-		} else {
-			for _, addr := range membersAddr {
-				members = append(members, &pool.Member{
-					IpAddress:   addr,
-					Port:        int(port.NodePort),
-					Backup:      false,
-					Weight:      1,
-					Name:        poolName,
-					MonitorPort: monitorPort,
-				})
-			}
+			members = append(members, &pool.Member{
+				IpAddress:   addr.IP,
+				Port:        addr.Port,
+				Backup:      false,
+				Weight:      1,
+				Name:        addr.Name,
+				MonitorPort: monitorPort,
+			})
 		}
 		poolOptions := serviceConf.CreatePoolOptions(port)
 		poolOptions.PoolName = poolName
 		poolOptions.Members = members
-
-		if serviceConf.IsAutoCreateSecurityGroup {
-			if serviceConf.IsAutoCreateSecurityGroup {
-				ingressInspect.AddSecgroupRule(int(port.NodePort),
-					vngcloudutil.HealthcheckProtocoToSecGroupProtocol(string(port.Protocol)))
-				if strings.EqualFold(string(port.Protocol), "UDP") {
-					ingressInspect.AddSecgroupRule(monitorPort,
-						vngcloudutil.HealthcheckProtocoToSecGroupProtocol("ICMP"))
-				}
-			}
-		}
 
 		listenerOptions := serviceConf.CreateListenerOptions(port)
 		listenerOptions.ListenerName = listenerName
@@ -1138,8 +1170,14 @@ func (c *vLB) ensureSecurityGroups(oldInspect, inspect *Expander) error {
 		vngcloudutil.WaitForServerActive(c.vServerSC, c.getProjectID(), instanceID)
 		return err
 	}
+
+	// ensure security groups for all instances
+	oldInspectSecgroups := make([]string, 0)
+	if oldInspect != nil && oldInspect.serviceConf != nil && oldInspect.serviceConf.SecurityGroups != nil {
+		oldInspectSecgroups = oldInspect.serviceConf.SecurityGroups
+	}
 	for _, instanceID := range inspect.InstanceIDs {
-		err := ensureSecGroupsForInstance(instanceID, oldInspect.serviceConf.SecurityGroups, validSecgroups)
+		err := ensureSecGroupsForInstance(instanceID, oldInspectSecgroups, validSecgroups)
 		if err != nil {
 			klog.Errorln("error when ensure security groups for instance", err)
 		}
