@@ -324,7 +324,7 @@ func (c *vLB) ensureLoadBalancer(
 		"Load balancer %s for service %s/%s is ready to use for Kubernetes controller\n----- DONE ----- ",
 		lb.Name, pService.Namespace, pService.Name)
 
-	c.resourceDependant.SetService(pService, newIngExpander.serviceConf.TargetType == TargetTypeIP)
+	c.resourceDependant.SetService(pService, newIngExpander.serviceConf.TargetType == TargetTypeIP || c.cniType == cni_detector.CiliumNativeRouting)
 	return lbStatus, nil
 }
 

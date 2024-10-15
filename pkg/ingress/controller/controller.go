@@ -1193,7 +1193,7 @@ func (c *Controller) ensureCompareIngress(_, ing *nwv1.Ingress) (*lObjects.LoadB
 		return nil, err
 	}
 	c.cacheLoadBalancerBuilder[fmt.Sprintf("%s/%s", ing.Namespace, ing.Name)] = newIngExpander
-	c.resourceDependant.SetIngress(ing, newIngExpander.serviceConf.TargetType == TargetTypeIP)
+	c.resourceDependant.SetIngress(ing, newIngExpander.serviceConf.TargetType == TargetTypeIP || c.cniType == cni_detector.CiliumNativeRouting)
 	return lb, nil
 }
 
