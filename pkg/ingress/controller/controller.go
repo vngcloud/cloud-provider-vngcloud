@@ -594,7 +594,7 @@ func (c *Controller) updateIngressStatus(ing *nwv1.Ingress, lb *lObjects.LoadBal
 	newState := new(nwv1.IngressLoadBalancerStatus)
 	addr := net.ParseIP(lb.Address)
 	if addr != nil {
-		newState.Ingress = []nwv1.IngressLoadBalancerIngress{{IP: lb.Address}}
+		newState.Ingress = []nwv1.IngressLoadBalancerIngress{{Hostname: lb.Address + ".nip.io"}}
 	} else {
 		newState.Ingress = []nwv1.IngressLoadBalancerIngress{{Hostname: lb.Address}}
 	}

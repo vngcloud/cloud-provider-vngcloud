@@ -342,7 +342,7 @@ func (c *vLB) createLoadBalancerStatus(pService *corev1.Service, lb *lObjects.Lo
 	status := &corev1.LoadBalancerStatus{}
 	addr := net.ParseIP(lb.Address)
 	if addr != nil {
-		status.Ingress = []corev1.LoadBalancerIngress{{IP: lb.Address}}
+		status.Ingress = []corev1.LoadBalancerIngress{{Hostname: lb.Address + ".nip.io"}}
 	} else {
 		status.Ingress = []corev1.LoadBalancerIngress{{Hostname: lb.Address}}
 	}
